@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  4x1 横条版声明：minWidth 按「4 格 × 70dp - 30dp」= 250dp，高度 1 格 = 40dp。
+  允许横向缩放适配不同屏宽，高度固定一行。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_desc_bar"
+    android:initialLayout="@layout/widget_open_bar"
+    android:minHeight="40dp"
+    android:minWidth="250dp"
+    android:previewLayout="@layout/widget_open_bar"
+    android:resizeMode="horizontal"
+    android:targetCellHeight="1"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

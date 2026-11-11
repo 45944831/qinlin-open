@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小部件声明：4x2（minWidth/minHeight 按「4 格 × 70dp - 30dp」算）。
+  updatePeriodMillis=0：不做定时唤醒。内容只在「开门 / 换门 / 回到 App」时刷新，
+  这项不存在后台轮询，因此不额外耗电。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_desc"
+    android:initialLayout="@layout/widget_open"
+    android:minHeight="110dp"
+    android:minWidth="250dp"
+    android:previewLayout="@layout/widget_open"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="4"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

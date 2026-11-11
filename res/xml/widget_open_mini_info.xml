@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2x1 迷你版声明：minWidth 按「2 格 × 70dp - 30dp」= 110dp，高度 1 格 = 40dp。
+  允许横向拉宽（门名能显全），高度锁一行——拉高会变成一半空白。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_desc_mini"
+    android:initialLayout="@layout/widget_open_mini"
+    android:minHeight="40dp"
+    android:minWidth="110dp"
+    android:previewLayout="@layout/widget_open_mini"
+    android:resizeMode="horizontal"
+    android:targetCellHeight="1"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

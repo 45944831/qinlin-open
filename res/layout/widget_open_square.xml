@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  1x1 迷你版：整格就是一个开门按钮，没有文字说明。
+  桌面最小、最省地方，适合只想放一个「推一下就走」的按钮。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_btn"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_sq_red"
+    android:ellipsize="end"
+    android:gravity="center"
+    android:maxLines="1"
+    android:text="开门"
+    android:textColor="#FFFFFF"
+    android:textSize="13sp"
+    android:textStyle="bold" />

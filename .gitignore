@@ -1,0 +1,21 @@
+# 本仓库只收录「可重建的源码 + 文档」，其余一律不上传。
+# 排除项包括：debug.keystore 签名私钥、已签名 APK、真机截图、UI dump / 日志、
+# build/ 编译产物、tools/android.jar(27MB) 与 platform-33.zip(67MB)。
+/*
+
+!/.gitignore
+!/README.md
+!/AndroidManifest.xml
+!/build-apk.py
+!/src/
+!/src/**
+!/res/
+!/res/**
+!/docs/
+!/docs/**
+
+# 二次防线：这些文件即使误用 git add -f 也不应进入仓库
+build/debug.keystore
+tools/android.jar
+tools/platform-33.zip
+qinlin-open.apk

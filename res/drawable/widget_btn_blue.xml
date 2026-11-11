@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 未登录 / 未选门：按钮改成「打开应用」，用蓝色与开门红区分开，避免误以为能直接开 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="14dp" />
+    <solid android:color="#2563EB" />
+</shape>

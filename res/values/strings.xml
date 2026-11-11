@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">亲邻开门</string>
+
+    <!-- 四种小部件样式：挑选列表里靠 label 区分，label 里带格子尺寸，用户一眼知道占多大 -->
+    <string name="widget_name">快捷开门 · 大卡片 4×2</string>
+    <string name="widget_desc">门名 + 开门按钮 + 上次结果，信息最全</string>
+
+    <string name="widget_name_square">快捷开门 · 按钮 1×1</string>
+    <string name="widget_desc_square">整格就是一个开门按钮，最小最省地方</string>
+
+    <string name="widget_name_mini">快捷开门 · 长按钮 2×1</string>
+    <string name="widget_desc_mini">整条都是开门按钮，触控面积比 1×1 大一倍</string>
+
+    <string name="widget_name_bar">快捷开门 · 横条 4×1</string>
+    <string name="widget_desc_bar">一行高度：门名 + 上次结果 + 开门按钮</string>
+</resources>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2x1 长按钮版：整条就是一个开门按钮。
+  最初这里做的是「左边门名 + 右边按钮」，真机渲染发现 110dp 宽度下门名只能显示「1…」，
+  与其挤成残字，不如把整个 2×1 都给按钮——触控面积比 1×1 大一倍，这是它存在的理由。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_btn"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_pill_red"
+    android:ellipsize="end"
+    android:gravity="center"
+    android:maxLines="1"
+    android:text="开 门"
+    android:textColor="#FFFFFF"
+    android:textSize="14sp"
+    android:textStyle="bold" />

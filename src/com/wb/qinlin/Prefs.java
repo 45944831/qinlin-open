@@ -1,0 +1,147 @@
+package com.wb.qinlin;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+/** 仅在本机保存会话与默认门，不上传任何数据。 */
+public final class Prefs {
+    private static final String P = "qinlin";
+    private Prefs() {}
+
+    private static SharedPreferences sp(Context c) {
+        return c.getSharedPreferences(P, Context.MODE_PRIVATE);
+    }
+
+    public static String phone(Context c) { return sp(c).getString("phone", ""); }
+    public static void setPhone(Context c, String v) {
+        sp(c).edit().putString("phone", v).apply();
+    }
+
+    public static String session(Context c) { return sp(c).getString("session", ""); }
+
+    /**
+     * 保存凭证时顺手记下「写入时间」与「登录时的 openid 指纹」。
+     * 覆盖安装 / 设备标识变化后，日志据此判断服务端是否可能拒绝旧会话。
+     */
+    public static void setSession(Context c, String v) {
+        sp(c).edit().putString("session", v)
+                .putLong("session_at", System.currentTimeMillis())
+                .putString("session_openid_fp", AppLog.fp(openid(c)))
+                .apply();
+    }
+    public static long sessionSavedAt(Context c) { return sp(c).getLong("session_at", 0); }
+    public static String sessionOpenidFp(Context c) {
+        return sp(c).getString("session_openid_fp", "");
+    }
+
+    /**
+     * 退出登录：清凭证、小区名与门列表缓存（缓存属于该账号，不能带给下一个账号），
+     * 但保留手机号 / openid / 默认门，方便下次免输入重登。
+     */
+    public static void clearSession(Context c) {
+        sp(c).edit().remove("session").remove("cname")
+                .remove("session_at").remove("session_openid_fp")
+                .remove("door_cache").remove("w_last").apply();
+    }
+
+    /**
+     * 桌面小部件「上次开门结果」：格式 {@code ok|时间戳|文案}，只有一条，覆盖写。
+     * 小部件没打开过时为空串，界面据此显示「点按钮直接开门」。
+     */
+    public static String widgetLast(Context c) { return sp(c).getString("w_last", ""); }
+    public static void setWidgetLast(Context c, String v) {
+        sp(c).edit().putString("w_last", v == null ? "" : v).apply();
+    }
+
+    /**
+     * 门列表缓存（JSON 文本）。打开门列表时先渲染它，再后台刷新，
+     * 避免每次都要等一轮「小区 + 逐小区门列表」的网络请求。
+     */
+    public static String doorCache(Context c) { return sp(c).getString("door_cache", ""); }
+    public static void setDoorCache(Context c, String v) {
+        sp(c).edit().putString("door_cache", v == null ? "" : v).apply();
+    }
+
+    /**
+     * 上次成功的「小区列表请求姿势」下标（0 JSON/数值 / 1 表单 / 2 URL参数 / 3 JSON/全字符串）。
+     * 下次优先用它，正常情况第一次就成功，省掉最多 3 次串行兜底请求。
+     */
+    public static int commMode(Context c) { return sp(c).getInt("comm_mode", -1); }
+    public static void setCommMode(Context c, int v) {
+        sp(c).edit().putInt("comm_mode", v).apply();
+    }
+
+    /** 安装戳（versionCode/lastUpdateTime）：日志用来识别覆盖安装与版本变化。 */
+    public static String logStamp(Context c) { return sp(c).getString("log_stamp", ""); }
+    public static void setLogStamp(Context c, String v) {
+        sp(c).edit().putString("log_stamp", v == null ? "" : v).apply();
+    }
+
+    /** 登录后从 communityInfo 读回的小区名，用于顶部登录态卡片显示。 */
+    public static String communityName(Context c) {
+        return sp(c).getString("cname", "");
+    }
+    public static void setCommunityName(Context c, String v) {
+        sp(c).edit().putString("cname", v == null ? "" : v).apply();
+    }
+
+    /** 设备标识只生成一次并持久化：登录与后续请求必须用同一个 openid。 */
+    public static String openid(Context c) {
+        SharedPreferences p = sp(c);
+        String v = p.getString("openid", "");
+        if (v.length() == 0) {
+            byte[] b = new byte[8];
+            new java.security.SecureRandom().nextBytes(b);
+            StringBuilder sb = new StringBuilder();
+            for (byte x : b) sb.append(String.format(java.util.Locale.US, "%02x", x & 0xFF));
+            v = sb.toString();
+            p.edit().putString("openid", v).apply();
+        }
+        return v;
+    }
+
+    public static int communityId(Context c) { return sp(c).getInt("cid", 0); }
+    public static int doorId(Context c) { return sp(c).getInt("did", 0); }
+    public static String doorName(Context c) { return sp(c).getString("dname", ""); }
+    public static void setDoor(Context c, int cid, int did, String name) {
+        sp(c).edit().putInt("cid", cid).putInt("did", did).putString("dname", name).apply();
+    }
+
+    /**
+     * 是否还需要走「首次选门」引导。
+     * 只要本机还没有可用的门（门 id / 小区 id 缺失），或这扇门不是当前手机号确认过的
+     * （换账号登录），就再引导一次；否则冷启动与后续登录都直接进主界面。
+     */
+    public static boolean needsOnboarding(Context c) {
+        String phone = phone(c);
+        if (phone.length() == 0) return true;
+        if (communityId(c) <= 0 || doorId(c) <= 0) return true;
+        return !phone.equals(doorConfirmedPhone(c));
+    }
+
+    /** 记录「此手机号已确认过要控制的门」：确认后不再自动弹门列表。 */
+    public static String doorConfirmedPhone(Context c) {
+        return sp(c).getString("door_confirmed_phone", "");
+    }
+    public static void setDoorConfirmed(Context c, String phone) {
+        sp(c).edit().putString("door_confirmed_phone", phone == null ? "" : phone).apply();
+    }
+
+    /** 换账号登录时清掉上一账号的门选择与确认标记，避免把别人的门当默认开门。 */
+    public static void clearDoor(Context c) {
+        sp(c).edit().remove("cid").remove("did").remove("dname")
+                .remove("dkind").remove("donline")
+                .remove("w_last")
+                .remove("door_confirmed_phone").apply();
+    }
+
+    /** 选中的门所属区域与在线状态：主界面卡片用来「显示这扇门」。旧数据为空时会退化成只显示 id。 */
+    public static String doorKind(Context c) { return sp(c).getString("dkind", ""); }
+    public static String doorOnline(Context c) { return sp(c).getString("donline", ""); }
+    public static void setDoorMeta(Context c, String kind, String online) {
+        sp(c).edit()
+                .putString("dkind", kind == null ? "" : kind)
+                .putString("donline", online == null ? "" : online)
+                .apply();
+    }
+}

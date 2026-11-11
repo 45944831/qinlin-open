@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  4x1 横条版：左边两行（门名 + 上次结果），右边开门按钮。
+  只要一行高度，信息比 1x1 / 2x1 全，适合放在桌面顶部或底部一条。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingLeft="12dp"
+    android:paddingTop="4dp"
+    android:paddingRight="5dp"
+    android:paddingBottom="4dp">
+
+    <TextView
+        android:id="@+id/w_dot"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="●"
+        android:textColor="#137333"
+        android:textSize="9sp" />
+
+    <LinearLayout
+        android:id="@+id/w_header"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/w_door"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="1栋2单元"
+            android:textColor="#16233B"
+            android:textSize="12.5sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/w_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="点右边开门"
+            android:textColor="#8A94A6"
+            android:textSize="9.5sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/w_btn"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_marginStart="6dp"
+        android:background="@drawable/widget_pill_red"
+        android:gravity="center"
+        android:minWidth="72dp"
+        android:paddingLeft="16dp"
+        android:paddingRight="16dp"
+        android:text="开 门"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+</LinearLayout>

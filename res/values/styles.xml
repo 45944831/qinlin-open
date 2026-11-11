@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 门列表以悬浮卡片盖在主界面之上：主界面仍可见并变暗，不跳全屏页面 -->
+    <style name="FloatingDoorList" parent="@android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.55</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+
+    <!-- 全屏日志面板：同样是浮层外观，但关闭只认「✕ 关闭」与返回键。
+         日志是排障现场，误触外部就消失会丢上下文，所以关掉 windowCloseOnTouchOutside。 -->
+    <style name="FloatingLog" parent="@android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+    </style>
+</resources>
