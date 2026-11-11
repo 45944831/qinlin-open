@@ -56,6 +56,13 @@ public final class AppLog {
     private static final int MAX_FILE = 256 * 1024;  // 单个日志文件上限，超出轮转
     private static final int MAX_MSG = 1500;         // 单条消息上限
 
+    /** 冷启动回填：把落盘的单行日志还原成 Entry 的格式（与 Entry.line() 严格对应）。 */
+    private static final java.util.regex.Pattern LINE_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^(\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})  (\\S+)  (\\S+)  \\[([^\\]]+)\\]  (.*)$");
+    /** 每次进程只回填一次，避免 Activity 重建导致历史重复插入。 */
+    private static boolean hydrated;
+
     private static final Object LOCK = new Object();
     private static final List<Entry> MEM = new ArrayList<Entry>();
     private static final ThreadLocal<String> TRACE = new ThreadLocal<String>();
@@ -129,6 +136,23 @@ public final class AppLog {
         /** 单行、可解析的日志格式，落盘与界面显示共用。 */
         public String line() {
             return stampText + "  " + level + "  " + tag + "  [" + trace + "]  " + msg;
+        }
+
+        /** 冷启动回填：把落盘的一行还原成 Entry；格式不符就跳过，不影响其它行。 */
+        static Entry parse(String line) {
+            if (line == null) return null;
+            java.util.regex.Matcher m = LINE_PATTERN.matcher(line);
+            if (!m.matches()) return null;
+            long t;
+            try {
+                // 落盘格式不带年份，补当前年即可；line() 会重新格式化回同样的月日时分秒
+                SimpleDateFormat p = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US);
+                int year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR);
+                t = p.parse(year + "-" + m.group(1)).getTime();
+            } catch (Exception e) {
+                t = System.currentTimeMillis();
+            }
+            return new Entry(t, m.group(2), m.group(3), m.group(4), m.group(5));
         }
     }
 
@@ -334,19 +358,66 @@ public final class AppLog {
     // ---------- 启动 / 状态快照 ----------
 
     /**
+     * 冷启动后把磁盘尾部历史补回内存。
+     *
+     * 小部件是在后台被点的：广播会拉起进程写日志并落盘，进程随后可能被系统回收。
+     * 用户再打开 App 时是全新进程，MEM 为空，日志页就只能看到本次启动之后的几行 ——
+     * 那次小部件开门明明写进了文件，却「在 App 里看不到」。这里在写线程里先补历史、
+     * 再写本次启动行，保证时间顺序，且磁盘 IO 不落到主线程。
+     *
+     * 只补 MEM：不重复写盘、不通知订阅者（界面此时还没订阅）。
+     */
+    private static void hydrate() {
+        synchronized (LOCK) {
+            if (hydrated) return;
+            hydrated = true;
+        }
+        File f = file();
+        if (f == null) return;
+        List<String> lines = new ArrayList<String>();
+        File old = new File(f.getAbsolutePath() + ".1");
+        if (old.exists()) readLines(old, lines);
+        if (f.exists()) readLines(f, lines);
+        int from = Math.max(0, lines.size() - MAX_MEM);
+        List<Entry> hist = new ArrayList<Entry>();
+        for (int i = from; i < lines.size(); i++) {
+            Entry e = Entry.parse(lines.get(i));
+            if (e != null) hist.add(e);
+        }
+        if (hist.isEmpty()) return;
+        synchronized (LOCK) {
+            MEM.addAll(0, hist);   // 历史更旧，插在本次启动日志之前
+            while (MEM.size() > MAX_MEM) MEM.remove(0);
+        }
+    }
+
+    private static void readLines(File f, List<String> out) {
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"));
+            String line;
+            while ((line = r.readLine()) != null) out.add(line);
+        } catch (Exception ignored) {
+        } finally {
+            if (r != null) try { r.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    /**
      * 每次启动调用：记录包版本、首装/更新时间、本机凭证与默认门状态。
      * 通过对比上次记录的安装戳，可直接识别「覆盖安装 / 版本变化」。
      *
-     * 这里只往队列投一行「App 启动」，其余（PackageManager IPC、读本机状态、拼快照）
-     * 全部在日志写线程执行 —— 主线程不再为首帧之后的一串日志 IO / IPC 买单。
+     * 回填历史、拼快照、PackageManager IPC 全部在日志写线程执行 ——
+     * 主线程不再为首帧之后的一串日志 IO / IPC 买单。
      */
     public static void startup(Context c) {
         init(c);
         final Context appCtx = c.getApplicationContext() == null ? c : c.getApplicationContext();
-        i(SYS, "===== App 启动 =====");
         QUEUE.offer(new Runnable() {
             @Override public void run() {
                 try {
+                    hydrate();                       // 先补历史，顺序在本次启动日志之前
+                    i(SYS, "===== App 启动 =====");
                     writeStartupSnapshot(appCtx);
                 } catch (Throwable t) {
                     i(SYS, "启动快照生成失败：" + t.getClass().getSimpleName());

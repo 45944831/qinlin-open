@@ -41,6 +41,10 @@ public class OpenWidget extends AppWidgetProvider {
     /** 点主按钮时发给 {@link WidgetOpenReceiver} 的动作：故意用小部件自己的私有广播。 */
     public static final String ACTION_OPEN = "com.wb.qinlin.action.WIDGET_OPEN";
 
+    /** 本机开门记录的入口标记（常量收敛在 {@link OpenRecord}，这里只做转发）。 */
+    static final String FROM_WIDGET = OpenRecord.FROM_WIDGET;
+    static final String FROM_APP = OpenRecord.FROM_APP;
+
     private static final int REQ_OPEN = 3201;
     private static final int REQ_APP = 3202;
 
@@ -91,15 +95,37 @@ public class OpenWidget extends AppWidgetProvider {
         updateAll(context.getApplicationContext(), MODE_NORMAL);
     }
 
-    /** 记录一次开门结果（成功 / 失败都记），并立刻把结果写回桌面卡片。 */
-    static void noteResult(Context c, boolean ok, String text) {
+    /**
+     * 记录一次开门结果（成功 / 失败都记），一次写两份：
+     * ① 本机开门记录文件 —— 主界面「最近开门记录 / 今日开门 / 上次开门」读它；
+     * ② 桌面卡片「上次：…」状态。
+     *
+     * 应用内开门也走这里，两个入口共用同一个写入点，不会再出现「小部件开了门但 App 里查不到」。
+     */
+    static void noteResult(Context c, boolean ok, String text, int costMs, String from) {
         inFlight = 0L;
+        try {
+            OpenRecord.add(c, ok, costMs, recordDoor(c),
+                    text == null ? "" : text, from == null ? "" : from);
+        } catch (Throwable ignored) {
+            // 记录写入失败绝不能影响开门结果本身
+        }
         try {
             Prefs.setWidgetLast(c, (ok ? "1" : "0") + "|" + System.currentTimeMillis()
                     + "|" + (text == null ? "" : text));
         } catch (Throwable ignored) {
         }
         updateAll(c, MODE_NORMAL);
+    }
+
+    /** 记录里的门名：与主界面原本的记录规则一致；没存名字就退回门 ID。 */
+    private static String recordDoor(Context c) {
+        String name = Prefs.doorName(c);
+        if (name.length() == 0) {
+            int did = Prefs.doorId(c);
+            return did > 0 ? "门 #" + did : "";
+        }
+        return shortName(name);
     }
 
     /** 请求已发出、结果未回：先把按钮切成「开门中…」，点完立刻有反馈。 */
@@ -371,19 +397,20 @@ public class OpenWidget extends AppWidgetProvider {
 
             if (token.length() == 0) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：本机无凭证（未登录）");
-                updateAll(c, MODE_NORMAL);
+                // 被拦下也算一次尝试：写一条失败记录，App 里能看到「为什么没开」
+                noteResult(c, false, "未登录", 0, FROM_WIDGET);
                 toast(c, "请先在应用里登录");
                 return;
             }
             if (cid <= 0 || did <= 0) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：未选择门 cid=" + cid + " did=" + did);
-                updateAll(c, MODE_NORMAL);
+                noteResult(c, false, "未选门", 0, FROM_WIDGET);
                 toast(c, "请先在应用里选择要控制的门");
                 return;
             }
             if (!Net.online(c)) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：当前无网络（" + Net.describe(c) + "）");
-                noteResult(c, false, "无网络");
+                noteResult(c, false, "无网络", 0, FROM_WIDGET);
                 toast(c, "当前没有网络，无法开门");
                 return;
             }
@@ -400,22 +427,24 @@ public class OpenWidget extends AppWidgetProvider {
                 long cost = System.currentTimeMillis() - t0;
                 AppLog.ok(AppLog.OPEN, "小部件开门：服务端已接受指令（耗时 " + cost
                         + "ms，不等于物理门已开）| 原文：" + raw);
-                noteResult(c, true, "已开门");
+                noteResult(c, true, "已开门", (int) cost, FROM_WIDGET);
                 toast(c, "已发出开门指令，请确认门是否打开");
             } catch (QinlinApi.ApiException e) {
+                int cost = (int) (System.currentTimeMillis() - t0);
                 if ("SESSION_EXPIRED".equals(e.code)) {
                     Prefs.clearSession(c);
                     AppLog.w(AppLog.LOGIN, trace, "小部件开门：凭证已失效 → 已清除本机凭证，请重新登录");
-                    noteResult(c, false, "凭证失效，请重登录");
+                    noteResult(c, false, "凭证失效", cost, FROM_WIDGET);
                     toast(c, "凭证已失效，请打开应用重新登录");
                 } else {
                     AppLog.e(AppLog.ERR, trace, "小部件开门失败 [" + e.code + "] " + e.getMessage());
-                    noteResult(c, false, "失败 " + e.code);
+                    noteResult(c, false, "失败 " + e.code, cost, FROM_WIDGET);
                     toast(c, "开门失败：" + e.code);
                 }
             } catch (Exception e) {
                 AppLog.e(AppLog.ERR, trace, "小部件开门异常 " + AppLog.stack(e));
-                noteResult(c, false, "网络异常");
+                noteResult(c, false, "网络异常",
+                        (int) (System.currentTimeMillis() - t0), FROM_WIDGET);
                 toast(c, "开门失败：网络异常，请检查网络");
             }
         } finally {

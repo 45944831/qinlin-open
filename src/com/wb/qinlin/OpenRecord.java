@@ -35,6 +35,11 @@ public final class OpenRecord {
 
     private OpenRecord() {}
 
+    /** 开门入口标记：桌面小部件。 */
+    public static final String FROM_WIDGET = "widget";
+    /** 开门入口标记：应用内主按钮。 */
+    public static final String FROM_APP = "app";
+
     /** 一条开门记录。ms 为端到端耗时，&lt;=0 表示未知。 */
     public static final class Item {
         public final long at;
@@ -42,29 +47,51 @@ public final class OpenRecord {
         public final int ms;
         public final String door;
         public final String note;
+        /** 入口标记；旧数据没有该字段，按空串（应用内）处理。 */
+        public final String from;
 
         Item(long at, boolean ok, int ms, String door, String note) {
+            this(at, ok, ms, door, note, "");
+        }
+
+        Item(long at, boolean ok, int ms, String door, String note, String from) {
             this.at = at;
             this.ok = ok;
             this.ms = ms;
             this.door = door == null ? "" : door;
             this.note = note == null ? "" : note;
+            this.from = from == null ? "" : from;
         }
     }
 
     /** 追加一条记录；失败不影响开门主流程，异常全部吞掉。 */
     public static void add(Context c, boolean ok, int ms, String door, String note) {
+        add(c, ok, ms, door, note, "");
+    }
+
+    /**
+     * 带入口标记的记录：桌面小部件与应用内按钮共用这一份文件，
+     * 主界面的「最近开门记录 / 今日开门 / 上次开门」才能同时看到两个入口。
+     */
+    public static void add(Context c, boolean ok, int ms, String door, String note, String from) {
         if (c == null) return;
         synchronized (LOCK) {
             try {
                 List<Item> items = load(c);
-                items.add(new Item(System.currentTimeMillis(), ok, ms, door, note));
+                items.add(new Item(System.currentTimeMillis(), ok, ms, door, note, from));
                 save(c, trim(items));
             } catch (Throwable t) {
                 AppLog.w(AppLog.OPEN, "本机开门记录写入失败（不影响开门）："
                         + t.getClass().getSimpleName());
             }
         }
+    }
+
+    /** 记录行里的入口标签；旧数据无标记时不显示，保持原有排版。 */
+    public static String sourceLabel(String from) {
+        if (FROM_WIDGET.equals(from)) return "小组件";
+        if (FROM_APP.equals(from)) return "应用";
+        return "";
     }
 
     /** 最近的 n 条，新的在前。 */
@@ -177,7 +204,7 @@ public final class OpenRecord {
                     JSONObject o = new JSONObject(line);
                     out.add(new Item(o.optLong("at"), o.optInt("ok", 0) == 1,
                             o.optInt("ms", -1), o.optString("door", ""),
-                            o.optString("note", "")));
+                            o.optString("note", ""), o.optString("from", "")));
                 } catch (Exception ignore) {
                     // 单行损坏就跳过，不影响其它记录
                 }
@@ -200,6 +227,7 @@ public final class OpenRecord {
                 o.put("ms", it.ms);
                 o.put("door", it.door);
                 o.put("note", it.note);
+                if (it.from.length() > 0) o.put("from", it.from);
                 sb.append(o.toString()).append('\n');
             } catch (Exception ignore) {
                 // 序列化失败就跳过这一条

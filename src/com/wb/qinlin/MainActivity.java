@@ -889,11 +889,14 @@ public class MainActivity extends Activity {
             time.setSingleLine(true);
             row.addView(time, new LinearLayout.LayoutParams(dp(74), ViewGroup.LayoutParams.WRAP_CONTENT));
 
+            // 入口标签：区分「应用内按钮」与「桌面小部件」，旧记录没有该字段就不显示
+            String src = OpenRecord.sourceLabel(it.from);
+            String tail = src.length() > 0 ? " · " + src : "";
             String text;
             if (it.ok) {
-                text = it.door.length() > 0 ? "已开门 · " + it.door : "已开门";
+                text = (it.door.length() > 0 ? "已开门 · " + it.door : "已开门") + tail;
             } else {
-                text = it.note.length() > 0 ? "失败 · " + it.note : "失败";
+                text = (it.note.length() > 0 ? "失败 · " + it.note : "失败") + tail;
             }
             TextView result = label(text, 12, it.ok ? C_INK : Color.parseColor("#B3261E"), false);
             result.setSingleLine(true);
@@ -1454,15 +1457,6 @@ public class MainActivity extends Activity {
         doorHandleBg.setColor(Color.parseColor(on ? "#D93025" : "#AAB3C2"));
     }
 
-    /** 记录里只留能认出门的那一小段名字（去掉「楼栋门 · 」前缀与旧版在线后缀）。 */
-    private String shortDoorName() {
-        String name = Prefs.doorName(this);
-        int p = name.indexOf("  [在线:");
-        if (p > 0) name = name.substring(0, p);
-        int sep = name.indexOf(" · ");
-        return sep > 0 ? name.substring(sep + 3) : name;
-    }
-
     private void doOpen() {
         final long clickAt = System.currentTimeMillis();
         // 单手大按钮容易连点：请求未结束前直接忽略后续点击，避免重复下发开门指令。
@@ -1532,17 +1526,16 @@ public class MainActivity extends Activity {
                     failNote = e.code != null && e.code.length() > 0 ? e.code : "请求失败";
                     throw e;
                 } finally {
-                    // 先落一条本机记录，再复位按钮：主界面的「上次开门 / 今日开门 / 最近记录」都读它
-                    OpenRecord.add(MainActivity.this, succeeded,
-                            (int) (System.currentTimeMillis() - clickAt),
-                            shortDoorName(), failNote);
+                    // 两个入口共用同一个写入点：先落一条本机开门记录并同步桌面卡片，
+                    // 再投递刷新，保证主线程读到的已经是刚落盘的记录。
+                    int cost = (int) (System.currentTimeMillis() - clickAt);
+                    OpenWidget.noteResult(MainActivity.this, succeeded,
+                            succeeded ? "已开门" : failNote,
+                            cost, OpenWidget.FROM_APP);
                     finishOpen(succeeded);   // 成功 / 失败都复位按钮，不留「开门中…」死状态
                     runOnUiThread(new Runnable() {
                         @Override public void run() { refreshStats(); }
                     });
-                    // 把本次结果同步到桌面小部件（桌面上没放小部件时为空操作）
-                    OpenWidget.noteResult(MainActivity.this, succeeded,
-                            succeeded ? "已开门" : "本次未成功");
                 }
             }
         });
