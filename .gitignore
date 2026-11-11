@@ -7,6 +7,7 @@
 !/README.md
 !/AndroidManifest.xml
 !/build-apk.py
+!/api-probe.py
 !/src/
 !/src/**
 !/res/

@@ -1,0 +1,114 @@
+{
+ "/api/app/doorcontrol/queryDoorControlInfo": {
+  "code": "404",
+  "http": "404",
+  "message": "No message available",
+  "note": "404 对照",
+  "role": "control",
+  "state": "GONE"
+ },
+ "/api/app/doorcontrol/v2/open": {
+  "code": "404",
+  "http": "404",
+  "message": "No message available",
+  "note": "404 对照",
+  "role": "control",
+  "state": "GONE"
+ },
+ "/api/app/user/v1/bluetoothOpenDoorLog": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "蓝牙开门日志",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/app/user/v1/communityInfo": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "小区列表 v1",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/app/user/v2/communityInfo": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "小区列表",
+  "role": "primary",
+  "state": "ALIVE"
+ },
+ "/api/app/user/v2/queryAllUserDoorByCache": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "门列表",
+  "role": "primary",
+  "state": "ALIVE"
+ },
+ "/api/app/user/v2/queryUserDoorByCacheNew": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "门列表备选 A",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/app/user/v2/searchAllUserDoors": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "门列表备选 B",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/app/v1/login": {
+  "code": "121",
+  "http": "200",
+  "message": "签名不能为空",
+  "note": "验证码登录",
+  "role": "primary",
+  "state": "ALIVE"
+ },
+ "/api/app/v1/userCommunity/getCommunity": {
+  "code": "404",
+  "http": "404",
+  "message": "No message available",
+  "note": "404 对照",
+  "role": "control",
+  "state": "GONE"
+ },
+ "/api/doorcontrol/v2/open": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "开门备选 A",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/open/doorcontrol/openTheDoor": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "开门备选 B",
+  "role": "fallback",
+  "state": "ALIVE"
+ },
+ "/api/open/doorcontrol/v2/open": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "开门",
+  "role": "primary",
+  "state": "ALIVE"
+ },
+ "/api/user/v2/communityInfo": {
+  "code": "404",
+  "http": "404",
+  "message": "No message available",
+  "note": "404 对照",
+  "role": "control",
+  "state": "GONE"
+ }
+}

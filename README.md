@@ -65,6 +65,12 @@ python -c "import zipfile; z=zipfile.ZipFile('platform-33_r02.zip'); open('andro
 | `src/com/wb/qinlin/` | 全部 Java 源码（界面、协议、缓存、日志、小组件） |
 | `res/` | XML 布局 / drawable / 小组件配置 |
 | `build-apk.py` | 离线构建脚本 |
-| `docs/DEVLOG.md` | 完整排查与真机实测记录（按时间追加，897 行） |
+| `docs/DEVLOG.md` | 完整排查与真机实测记录（按时间追加，已脱敏） |
+| `docs/API-CONTRACT.md` | 真实接口契约、官方 APK 路径清单、备用路径与防失效规则 |
+| `docs/api-baseline.json` | 无凭证探测基线（14 条） |
+| `api-probe.py` | 接口探测脚本：`python api-probe.py`，无凭证、只读、不触发开门 |
+
+接口变更检测见 `docs/API-CONTRACT.md`：官方 App 升级后跑 `python api-probe.py --all`，
+退出码 `2` 即表示上游接口已变化。
 
 `docs/DEVLOG.md` 中的小区名、门名 / 门 ID、账号与设备标识均为示例值（已脱敏）。
