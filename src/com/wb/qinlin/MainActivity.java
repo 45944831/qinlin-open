@@ -1,6 +1,7 @@
 package com.wb.qinlin;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Rect;
@@ -65,6 +66,8 @@ public class MainActivity extends Activity {
 
     private EditText phoneEt;
     private EditText codeEt;
+    /** 凭证被服务端判超时但本机仍保留时，给一条「不收短信即可恢复」的退路。 */
+    private Button retryBtn;
 
     /**
      * 日志入口按钮：主界面不再内嵌日志区，点它打开二级弹窗（与门列表同款浮层）。
@@ -169,8 +172,12 @@ public class MainActivity extends Activity {
         refreshDoorLabel();
         applyLoginState();          // 重进 App 时按本机凭证恢复登录态 / 未登录态
 
-        if (Prefs.session(this).length() == 0) {
-            AppLog.i(AppLog.SYS, "首次使用：输入手机号 → 获取验证码 → 登录。凭证仅保存在本机。");
+        probeOnForegroundAsync();   // 按需探活：冷启动检查一次凭证是否已被作废（带短节流防抖）
+
+        if (!Prefs.loggedIn(this)) {
+            AppLog.i(AppLog.SYS, Prefs.sessionExpired(this)
+                    ? "本机凭证仍在，但上次被服务端判为失效（常见原因：官方 App 重新登录踢掉本会话）；可点「重试连接」或重新短信登录。"
+                    : "首次使用：输入手机号 → 获取验证码 → 登录。凭证仅保存在本机。");
         } else {
             AppLog.ok(AppLog.LOGIN, "检测到本机凭证 " + AppLog.fp(Prefs.session(this))
                     + "，可直接开门；若提示凭证失效请重新登录");
@@ -179,7 +186,7 @@ public class MainActivity extends Activity {
         // 已登录但本机还没存过小区名（例如刚升级到登录态版本）：后台静默补齐，
         // 不弹 busy、不滚动状态框，避免一打开 App 就跳到页面底部。
         String savedSession = Prefs.session(this);
-        if (savedSession.length() > 0 && Prefs.communityName(this).length() == 0) {
+        if (Prefs.loggedIn(this) && Prefs.communityName(this).length() == 0) {
             loadCommunityName(savedSession);
         }
 
@@ -207,6 +214,7 @@ public class MainActivity extends Activity {
         refreshDoorLabel();
         applyLoginState();
         refreshStats();        // 回到前台补刷「网关直连」与记录（可能在别处开过门）
+        probeOnForegroundAsync(); // 回到前台再检查一次（短时间内不重复发请求）
         // 桌面小部件跟着界面状态走：登录 / 换门 / 退出后，桌面上那张卡片要立刻反映最新的门
         OpenWidget.refreshAll(this);
     }
@@ -488,6 +496,20 @@ public class MainActivity extends Activity {
         row.addView(smsBtn);
         row.addView(loginBtn);
         loginBox.addView(row);
+
+        // 服务端会话超时后本机凭证仍在：先给一次「重新检查登录状态」的机会，
+        // 只有确认恢复不了才需要重新收短信。默认隐藏，避免干扰首次登录。
+        retryBtn = button("凭证已失效？点此重试连接", Color.parseColor("#FFF1E9"),
+                Color.parseColor("#8A3B12"));
+        LinearLayout.LayoutParams retryLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        retryLp.topMargin = dp(6);
+        retryBtn.setLayoutParams(retryLp);
+        retryBtn.setVisibility(View.GONE);
+        retryBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { retrySession(); }
+        });
+        loginBox.addView(retryBtn);
 
         smsBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { doSendSms(); }
@@ -1091,7 +1113,7 @@ public class MainActivity extends Activity {
                 int delta = target - (b[1] + openBtn.getHeight() / 2);
 
                 ViewGroup.LayoutParams lp = centerSpacer.getLayoutParams();
-                boolean logged = Prefs.session(MainActivity.this).length() > 0;
+                boolean logged = Prefs.loggedIn(MainActivity.this);
                 if (!logged) {
                     // 未登录时顶部是完整登录表单，强行下推会与表单重叠：保持自然排布，
                     // 只把可能残留的弹性留白清零（例如刚退出登录）。
@@ -1122,9 +1144,9 @@ public class MainActivity extends Activity {
     private void openDoorList() { openDoorList(false); }
 
     private void openDoorList(boolean onboarding) {
-        if (Prefs.session(this).length() == 0) {
-            AppLog.w(AppLog.DOORS, "门列表入口前置校验失败：session 为空");
-            notifyUser("请先登录，再点门列表选门");
+        if (!Prefs.loggedIn(this)) {
+            AppLog.w(AppLog.DOORS, "门列表入口前置校验失败：未登录或凭证已被标记超时");
+            notifyUser("请先登录（或点「重试连接」），再点门列表选门");
             return;
         }
         doorListOnboarding = onboarding;
@@ -1141,7 +1163,7 @@ public class MainActivity extends Activity {
      */
     private void maybeShowOnboarding() {
         if (onboardingShown) return;
-        if (Prefs.session(this).length() == 0) return;   // 未登录：先走登录表单
+        if (!Prefs.loggedIn(this)) return;   // 未登录 / 凭证超时：先走登录表单
         if (!Prefs.needsOnboarding(this)) return;
         onboardingShown = true;
         AppLog.i(AppLog.DOORS, "尚未确认要控制的门（did=" + Prefs.doorId(this)
@@ -1180,14 +1202,18 @@ public class MainActivity extends Activity {
     }
 
     private void applyLoginStateUi() {
-        boolean logged = Prefs.session(MainActivity.this).length() > 0;
+        boolean logged = Prefs.loggedIn(MainActivity.this);
+        boolean expired = Prefs.sessionExpired(MainActivity.this);
         if (lastLoginState == null || lastLoginState.booleanValue() != logged) {
             AppLog.i(AppLog.LOGIN, "登录态 → " + (logged
                     ? "已登录，本机凭证 " + AppLog.fp(Prefs.session(MainActivity.this))
-                    : "未登录"));
+                    : expired ? "未登录（凭证被判超时，本机凭证仍保留，可点「重试连接」）" : "未登录"));
             lastLoginState = Boolean.valueOf(logged);
         }
         loginBox.setVisibility(logged ? View.GONE : View.VISIBLE);
+        if (retryBtn != null) {
+            retryBtn.setVisibility(!logged && expired ? View.VISIBLE : View.GONE);
+        }
         brandBox.setVisibility(logged ? View.GONE : View.VISIBLE);
         accountBox.setVisibility(logged ? View.VISIBLE : View.GONE);
         // 记录卡只对已登录用户有意义：未登录时开门按钮都按不了，留着只是占位
@@ -1204,6 +1230,55 @@ public class MainActivity extends Activity {
         }
         refreshStats();        // 记录 / 指标跟着登录态一起刷新（本机数据）
         centerOpenButton();   // 登录态切换会改变上方高度，重新校正按钮位置
+    }
+
+    /**
+     * 后台节流探活：onCreate / onResume 都会调，间隔由 SessionGuard 控制（30 分钟）。
+     * 只有登录态真的发生变化（例如从「已超时」自动恢复）才刷新界面，避免无谓重排。
+     */
+    /**
+     * 按需探活：只在冷启动 / 回前台时检查一次凭证是否已被服务端作废，带短节流防抖。
+     * 不做任何定时或后台唤醒——服务端按账号单会话，新登录会作废旧凭证，轮询挡不住。
+     */
+    private void probeOnForegroundAsync() {
+        final Context c = getApplicationContext();
+        final boolean before = Prefs.loggedIn(c);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                SessionGuard.probeIfStale(c, false);
+                final boolean after = Prefs.loggedIn(c);
+                if (before != after) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            applyLoginState();
+                            OpenWidget.refreshAll(MainActivity.this);
+                            if (after) toast("登录状态已自动恢复，可以继续开门");
+                        }
+                    });
+                }
+            }
+        }, "session-probe").start();
+    }
+
+    /** 「重试连接」：不重发短信，直接用本机保留的凭证再探活一次。 */
+    private void retrySession() {
+        final Context c = getApplicationContext();
+        toast("正在重新检查登录状态…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final boolean ok = SessionGuard.retry(c);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        applyLoginState();
+                        OpenWidget.refreshAll(MainActivity.this);
+                        toast(ok ? "登录状态已恢复，可以继续开门"
+                                : "服务端仍判定凭证失效（常见于官方 App 重新登录），请重新获取验证码登录");
+                    }
+                });
+            }
+        }, "session-retry").start();
     }
 
     /** 静默补齐小区名：只查 communityInfo，不改状态框、不自动滚动。 */
@@ -1226,8 +1301,11 @@ public class MainActivity extends Activity {
                     AppLog.ok(AppLog.DOORS, "小区名补齐成功：" + names);
                 } catch (QinlinApi.ApiException e) {
                     if ("SESSION_EXPIRED".equals(e.code)) {
-                        Prefs.clearSession(MainActivity.this); // 凭证已失效 → 自动切回登录表单
-                        AppLog.w(AppLog.LOGIN, "静默补小区名时凭证失效 → 已清除凭证，切回登录表单");
+                        // 二次确认；即使确认超时也只标记过期、保留凭证
+                        boolean dead = SessionGuard.expiredAfterRetry(MainActivity.this);
+                        AppLog.w(AppLog.LOGIN, dead
+                                ? "静默补小区名时确认凭证超时 → 已标记过期（凭证保留），切回登录表单"
+                                : "静默补小区名时的 401 判定为误判，登录态保留");
                         applyLoginState();
                         return;
                     }
@@ -1320,10 +1398,28 @@ public class MainActivity extends Activity {
 
     private void handleError(QinlinApi.ApiException e, String trace) {
         if ("SESSION_EXPIRED".equals(e.code)) {
-            Prefs.clearSession(this);
-            applyLoginState();      // 凭证失效后自动切回登录表单
-            AppLog.w(AppLog.LOGIN, trace, "凭证已失效 → 已清除本机凭证，请重新获取验证码登录");
-            toast("凭证已失效，请重新登录");
+            // 二次确认要联网，必须放后台线程；结果再回主线程决定是否切登录表单。
+            // 无论结论如何都不删 sessionId，避免一次误判就变成「被登出」。
+            AppLog.w(AppLog.LOGIN, trace, "收到 401 → 后台二次确认是否真的登录超时…");
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final boolean dead = SessionGuard.expiredAfterRetry(MainActivity.this);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            if (dead) {
+                                applyLoginState();
+                                AppLog.w(AppLog.LOGIN, trace,
+                                        "已确认登录超时 → 只标记过期、保留本机凭证；可点「重试连接」或重新短信登录");
+                                toast("登录已失效：凭证已保留，可点「重试连接」或重新登录");
+                            } else {
+                                AppLog.w(AppLog.LOGIN, trace, "401 二次确认为网关误判，登录态保留");
+                                toast("刚才是网关临时异常，登录状态仍有效，请重试");
+                            }
+                        }
+                    });
+                }
+            }, "session-confirm").start();
         } else {
             AppLog.e(AppLog.ERR, trace, "请求失败 [" + e.code + "] " + e.getMessage());
             toast("请求失败：" + e.code);
@@ -1378,8 +1474,15 @@ public class MainActivity extends Activity {
                 + " | 网络=" + Net.describe(this));
         async("正在登录…", new Work() {
             @Override public void run() throws Exception {
-                final String token = QinlinApi.login(phone, code);
+                // 保留完整登录响应：除 sessionId 外可能还有长效凭证 / 续期票据，
+                // 字段名已由 QinlinApi 记进日志，原文只落本机、不上传。
+                org.json.JSONObject data = QinlinApi.loginDetailed(phone, code);
+                final String token = data.optString("sessionId", "").trim();
+                if (token.length() == 0) {
+                    throw new QinlinApi.ApiException("BAD_FORMAT", "登录响应缺少 sessionId");
+                }
                 Prefs.setSession(MainActivity.this, token);
+                Prefs.setLoginData(MainActivity.this, data.toString());
                 AppLog.ok(AppLog.LOGIN, "登录成功 | session=" + AppLog.fp(token)
                         + " | 登录时openid=" + AppLog.fp(Prefs.openid(MainActivity.this))
                         + " | 写入时间=" + AppLog.time(Prefs.sessionSavedAt(MainActivity.this)));
@@ -1393,6 +1496,7 @@ public class MainActivity extends Activity {
                             + " → " + AppLog.maskPhone(phone) + "）：已清除旧账号的门选择，重新引导选门");
                 }
                 applyLoginState();  // 立刻把界面切成「已登录」：账号卡片 + 退出按钮
+                refreshDoorLabel(); // 同步刷新门卡片的「会话保存于」为新凭证写入时间
                         toast("登录成功，凭证已更新");
                 statusOk("登录成功：凭证已更新并保存在本机。");
                 loadCommunityName(token);   // 只补小区名，门列表交给悬浮二级界面
@@ -1479,9 +1583,11 @@ public class MainActivity extends Activity {
                 + " | 门=" + Prefs.doorName(this)
                 + " | 凭证写入=" + AppLog.time(Prefs.sessionSavedAt(this)));
 
-        if (token.length() == 0) {
-            AppLog.w(AppLog.OPEN, trace, "前置校验失败：session 为空（界面显示已登录但本机无凭证）");
-            notifyUser("请先登录");
+        if (!Prefs.loggedIn(this)) {
+            AppLog.w(AppLog.OPEN, trace, token.length() == 0
+                    ? "前置校验失败：session 为空（界面显示已登录但本机无凭证）"
+                    : "前置校验失败：凭证已被标记超时，请先点「重试连接」");
+            notifyUser(token.length() == 0 ? "请先登录" : "登录已超时，请点「重试连接」或重新登录");
             return;
         }
         if (cid <= 0 || did <= 0) {

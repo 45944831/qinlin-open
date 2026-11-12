@@ -2,6 +2,7 @@
 <!--
   4x1 横条版声明：minWidth 按「4 格 × 70dp - 30dp」= 250dp，高度 1 格 = 40dp。
   允许横向缩放适配不同屏宽，高度固定一行。
+  updatePeriodMillis=0：不定时唤醒、不做后台探活。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc_bar"

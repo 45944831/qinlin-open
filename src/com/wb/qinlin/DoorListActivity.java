@@ -291,9 +291,9 @@ public class DoorListActivity extends Activity {
      */
     private void loadDoors(final boolean allowCache) {
         final String token = Prefs.session(this);
-        if (token.length() == 0) {
-            AppLog.w(AppLog.DOORS, "门列表打开但 session 为空");
-            status("未登录，请回主界面重新短信登录。");
+        if (!Prefs.loggedIn(this)) {
+            AppLog.w(AppLog.DOORS, "门列表打开但未登录 / 凭证已被标记超时");
+            status("未登录或凭证已超时，请回主界面点「重试连接」，或重新短信登录。");
             showSkip();
             return;
         }
@@ -344,9 +344,13 @@ public class DoorListActivity extends Activity {
                     if (d.doors.isEmpty()) showSkip();
                 } catch (QinlinApi.ApiException e) {
                     if ("SESSION_EXPIRED".equals(e.code)) {
-                        Prefs.clearSession(DoorListActivity.this);   // 同时清掉门列表缓存
-                        AppLog.w(AppLog.LOGIN, "门列表读取触发凭证失效 → 已清除本机凭证与缓存");
-                        status("凭证已失效，请回主界面重新短信登录。");
+                        boolean dead = SessionGuard.expiredAfterRetry(DoorListActivity.this);
+                        AppLog.w(AppLog.LOGIN, dead
+                                ? "门列表读取确认登录超时 → 只标记过期，本机凭证保留"
+                                : "门列表读取的 401 判定为误判，登录态保留");
+                        status(dead
+                                ? "服务端判定登录已超时，本机凭证已保留。回主界面点「重试连接」，或重新短信登录。"
+                                : "刚才是网关临时异常，登录状态仍有效，请点「↻ 刷新门列表」重试。");
                         showSkip();
                     } else {
                         AppLog.e(AppLog.ERR, "门列表读取失败 [" + e.code + "] " + e.getMessage());

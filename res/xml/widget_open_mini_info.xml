@@ -2,6 +2,7 @@
 <!--
   2x1 迷你版声明：minWidth 按「2 格 × 70dp - 30dp」= 110dp，高度 1 格 = 40dp。
   允许横向拉宽（门名能显全），高度锁一行——拉高会变成一半空白。
+  updatePeriodMillis=0：不定时唤醒、不做后台探活。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc_mini"

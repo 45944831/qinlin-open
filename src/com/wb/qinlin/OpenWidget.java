@@ -24,7 +24,8 @@ import java.util.Locale;
  * 1. 只有一个开门入口（主按钮），点下去直接下发指令，**不打开 App**，不打断用户当前在做什么；
  * 2. 结果就地反馈：按钮先变「开门中…」，结果写回同一张卡片的说明行，不依赖 Toast
  *    （小部件是在后台被点的，部分 ROM 会吞掉后台 Toast）；
- * 3. 不轮询、不定时唤醒（updatePeriodMillis=0），只在开门 / 换门 / 回到 App 时刷新；
+ * 3. 不轮询、不定时唤醒（updatePeriodMillis=0）：服务端按账号单会话，新登录会作废旧凭证，
+ *    后台探活挡不住互踢。卡片只在开门 / 换门 / 回到 App 时刷新，会话检查同样按需触发；
  * 4. 开门逻辑与 App 内完全一致：同一个 {@link QinlinApi#openDoor}、同一份日志、同样的前置校验，
  *    不做第二套实现，避免两边行为漂移。
  *
@@ -70,6 +71,8 @@ public class OpenWidget extends AppWidgetProvider {
 
     @Override
     public void onUpdate(Context context, AppWidgetManager mgr, int[] ids) {
+        // 只按本机状态重画卡片：不发网络请求、不唤醒后台。
+        // 会话检查是「按需」的——用户点开门时 openNow() 会自己探活一次。
         update(context, mgr, ids, style());
     }
 
@@ -198,13 +201,12 @@ public class OpenWidget extends AppWidgetProvider {
 
     private static State readState(Context c, int mode) {
         State s = new State();
-        final String token = Prefs.session(c);
         final int cid = Prefs.communityId(c);
         final int did = Prefs.doorId(c);
         final String doorName = Prefs.doorName(c);
         final String kind = Prefs.doorKind(c);
 
-        s.logged = token.length() > 0;
+        s.logged = Prefs.loggedIn(c);
         s.ready = s.logged && cid > 0 && did > 0;
         s.busy = mode == MODE_BUSY;
 
@@ -391,16 +393,26 @@ public class OpenWidget extends AppWidgetProvider {
         try {
             QinlinApi.setOpenid(Prefs.openid(c));
 
-            final String token = Prefs.session(c);
+            String token = Prefs.session(c);
             final int cid = Prefs.communityId(c);
             final int did = Prefs.doorId(c);
 
-            if (token.length() == 0) {
-                AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：本机无凭证（未登录）");
-                // 被拦下也算一次尝试：写一条失败记录，App 里能看到「为什么没开」
-                noteResult(c, false, "未登录", 0, FROM_WIDGET);
-                toast(c, "请先在应用里登录");
-                return;
+            if (!Prefs.loggedIn(c)) {
+                // 凭证被判超时但本机仍保留：先用它探活一次，恢复就直接继续开门，
+                // 用户不必为了点一下桌面按钮先回 App 重新收短信。
+                if (token.length() > 0 && SessionGuard.retry(c)) {
+                    AppLog.ok(AppLog.LOGIN, trace, "小部件开门前探活成功 → 凭证恢复，继续开门");
+                    token = Prefs.session(c);
+                    refreshAll(c);
+                } else {
+                    AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：未登录或凭证超时且探活未恢复");
+                    // 被拦下也算一次尝试：写一条失败记录，App 里能看到「为什么没开」
+                    noteResult(c, false, token.length() > 0 ? "凭证超时" : "未登录", 0, FROM_WIDGET);
+                    toast(c, token.length() > 0
+                            ? "登录已失效，请打开应用点「重试连接」"
+                            : "请先在应用里登录");
+                    return;
+                }
             }
             if (cid <= 0 || did <= 0) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：未选择门 cid=" + cid + " did=" + did);
@@ -432,10 +444,14 @@ public class OpenWidget extends AppWidgetProvider {
             } catch (QinlinApi.ApiException e) {
                 int cost = (int) (System.currentTimeMillis() - t0);
                 if ("SESSION_EXPIRED".equals(e.code)) {
-                    Prefs.clearSession(c);
-                    AppLog.w(AppLog.LOGIN, trace, "小部件开门：凭证已失效 → 已清除本机凭证，请重新登录");
+                    boolean dead = SessionGuard.expiredAfterRetry(c);
+                    AppLog.w(AppLog.LOGIN, trace, dead
+                            ? "小部件开门：确认登录超时 → 只标记过期，本机凭证保留"
+                            : "小部件开门：401 判定为网关误判，登录态保留");
                     noteResult(c, false, "凭证失效", cost, FROM_WIDGET);
-                    toast(c, "凭证已失效，请打开应用重新登录");
+                    toast(c, dead ? "登录已失效，请打开应用点「重试连接」"
+                                 : "刚才是网关临时异常，请再点一次");
+                    if (dead) refreshAll(c);
                 } else {
                     AppLog.e(AppLog.ERR, trace, "小部件开门失败 [" + e.code + "] " + e.getMessage());
                     noteResult(c, false, "失败 " + e.code, cost, FROM_WIDGET);

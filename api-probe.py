@@ -34,6 +34,7 @@ BASELINE = os.path.join(ROOT, "docs", "api-baseline.json")
 #       control = 已知不存在的路径，用作「上游是否新增路由」的对照。
 PATHS = [
     ("primary",  "/api/app/v1/login",                          "验证码登录"),
+    ("primary",  "/api/app/v1/checkLogin",                     "会话探活（只读）"),
     ("primary",  "/api/app/user/v2/communityInfo",             "小区列表"),
     ("primary",  "/api/app/user/v2/queryAllUserDoorByCache",   "门列表"),
     ("primary",  "/api/open/doorcontrol/v2/open",              "开门"),

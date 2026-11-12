@@ -326,6 +326,11 @@ public final class QinlinApi {
         AppLog.i(AppLog.NET, "业务解析 code=" + code
                 + " | success=" + o.optBoolean("success", false)
                 + " | 摘要=" + shorten(redact(text), 160));
+        // 官方客户端有 _updateCacheSessionId，疑似服务端会轮换/下发新票据。
+        // 先只留痕不自动替换：真机导出日志确认字段名后再决定是否跟随，避免误换凭证。
+        if (authenticated && o.has("sessionId")) {
+            AppLog.w(AppLog.LOGIN, "⚠ 业务响应顶层出现 sessionId 字段（疑似服务端轮换票据），本版暂不自动替换");
+        }
         if (!ok) {
             String msg = redact(o.optString("message",
                     o.optString("msg", "亲邻未接受请求")));
@@ -418,8 +423,12 @@ public final class QinlinApi {
         unwrap(text, false);
     }
 
-    /** 验证码登录，返回 sessionId。 */
-    public static String login(String phone, String code) throws Exception {
+    /**
+     * 验证码登录，返回 data 的完整对象。
+     * 日志只记字段名（不记字段值），用于确认上游是否还下发长效凭证 / 续期票据；
+     * 完整原文由调用方存到本机，为「超时后静默续期」留材料。
+     */
+    public static JSONObject loginDetailed(String phone, String code) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("mobile", encryptPhone(phone));
         f.put("smsCode", code);
@@ -428,11 +437,32 @@ public final class QinlinApi {
         if (!(data instanceof JSONObject)) {
             throw new ApiException("BAD_FORMAT", "登录响应缺少凭证");
         }
-        String token = ((JSONObject) data).optString("sessionId", "").trim();
+        JSONObject d = (JSONObject) data;
+        JSONArray names = d.names();
+        AppLog.i(AppLog.LOGIN, "登录响应字段=" + (names == null ? "空" : names.toString()));
+        return d;
+    }
+
+    /** 验证码登录，返回 sessionId。 */
+    public static String login(String phone, String code) throws Exception {
+        String token = loginDetailed(phone, code).optString("sessionId", "").trim();
         if (token.length() == 0) {
             throw new ApiException("BAD_FORMAT", "登录响应缺少 sessionId");
         }
         return token;
+    }
+
+    /**
+     * 会话探活：官方 APK 静态提取到 app/v1/checkLogin，且无凭证探测确认
+     * /api/app/v1/checkLogin 路由存在（返回 401「登录已超时」）。
+     *
+     * 只读、无业务副作用。用途有二：
+     * ① 定期让服务端会话保持活跃，避免长时间不请求被判空闲超时；
+     * ② 收到 401 后再单独确认一次，区分「真超时」与「网关偶发误判 / 网络抖动」。
+     */
+    public static void checkLogin(String token) throws Exception {
+        TreeMap<String, String> f = new TreeMap<String, String>();
+        post("/api/app/v1/checkLogin", f, token, "json");
     }
 
     /**

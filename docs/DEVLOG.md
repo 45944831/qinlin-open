@@ -965,3 +965,375 @@ HTTPS 证书 / Docker。本文前面多章反复标注的「真实开门未验�
 - **真机当前不在线，未做现场验证**。待覆盖安装后实测：点桌面小组件开门 → 回 App，
   「最近开门记录」应出现带「小组件」标记的新行，且「今日开门 / 上次开门」同步；
   再在日志页确认小组件那次开门的诊断日志可见。
+
+---
+
+## 登录态保活与「自动被登出」修复（22:3x）
+
+### 现象
+
+用户反馈：本 APK 的登录状态不能持续在线，过一阵会被自动登出；官方 App 没有这个情况。
+
+### 根因
+
+- 网关 401 原文是「您还没有登录，或者**登录已超时**，请重新登录！」——
+  **服务端会话本身有超时**，不是本机凭证被系统清掉。
+- 旧实现 4 个入口（主界面开门 / 启动补小区名 / 门列表 / 小部件）一遇 401 立即
+  `Prefs.clearSession()` 并切回登录表单，把「票据超时」变成不可恢复的「本机被登出」；
+  网关偶发误判、网络抖动也会造成同样后果，只能重新收短信。
+- 旧实现零后台活动：4 份小部件声明都是 `updatePeriodMillis=0`，Manifest 无 Service / Alarm，
+  App 只在用户主动操作时发一次请求，会话长期空闲必然超时。
+- 官方 APK（v5.3.2）静态提取到 `app/v1/checkLogin`、`_updateCacheSessionId`、`getSessionId`、
+  `CheckLoginRedirectMixin`、`oneClick/appLogin`；官方有登录态检查、票据更新、静默登录
+  与后台活动，因此用户感知不到过期。完整证据与未验证假设见 `docs/API-CONTRACT.md` 第 10 节。
+
+### 改动
+
+- 新增 `SessionGuard.java`：30 分钟节流探活、401 二次确认、手动重试，统一维护
+  `session_expired` 标志；`checkLogin` 被业务拒绝时自动回退到已验收的 `communityInfo` 续期。
+- `QinlinApi` 新增 `checkLogin()`（`/api/app/v1/checkLogin`，无凭证探测确认 ALIVE）
+  与 `loginDetailed()`（留存完整登录响应，日志只记字段名）；业务响应顶层若出现
+  `sessionId` 先留痕、不自动替换（对应官方 `_updateCacheSessionId` 线索）。
+- `Prefs` 新增 `loggedIn / sessionExpired / lastKeepAlive / loginData`；
+  `clearSession()` 今后只由「主动退出登录」调用，服务端超时不再删凭证。
+- 主界面 / 门列表 / 小部件的 401 分支全部改为「二次确认 → 只标记过期」；
+  登录表单新增「凭证已超时？点此重试连接」；开门、门列表前置校验改用 `loggedIn()`。
+- 主界面 `onCreate / onResume`、小部件 `onUpdate`（`goAsync()` + 后台线程）做节流探活；
+  4 份 `widget_*_info.xml` 的 `updatePeriodMillis` 由 0 改为 1800000（Android 最小 30 分钟）。
+- `api-probe.py` 与 `docs/api-baseline.json` 纳入 checkLogin（15 条）；
+  `oneClick/appLogin` 因可能触发账号动作刻意不纳入日常探测。
+
+### 验证
+
+- `aapt2 compile/link`（生成 R.java）+ `javac --release 8 -encoding UTF-8` 全量编译通过，
+  100 个 class，仅 `PackageInfo.versionCode` 的 deprecation 提示；中间产物已清理，
+  **未生成 / 覆盖 APK**。
+- `python api-probe.py` 5 条主路径与基线一致、退出码 0；`api-baseline.json` JSON 合法。
+- **真机不在线（`adb devices` 空），未做现场验证**；按默认规则**未打包、未发布、未提交**。
+- 待真机确认：登录响应字段、探活是否真能续期、绝对 TTL 还是滑动续期、
+  响应是否轮换 sessionId、官方 App 并存是否单点互踢。见 API-CONTRACT 第 10 节验证清单。
+
+### 2026-11-12 真机日志证据（推翻「保活可续期」假设）
+
+导出文件 `qinlin-log-20261112-092905.txt`（75 KB / 461 行，覆盖 11-10 10:10 ~ 11-12 09:29，
+PC 副本在工作区 `E:\WorkBuddy1\2026-11-11-22-25-45\`）。
+**注意：设备仍装 11-11 11:31 的旧包**，日志只反映旧逻辑，看不到新版探活 / 重试连接。
+
+复现时间线（旧凭证 `len36#67f236ad`）：
+
+| 时间 | 事件 |
+| --- | --- |
+| 11-09 17:37 | 首装并短信登录（写入时间未记录，属旧版本数据） |
+| 11-10 10:11 ~ 11-11 11:31 | 多次门列表 / 主界面 / 小部件开门，全部 `code:0` |
+| 11-10 21:54:47 → 11-11 11:31:15 | **空闲 13h36m 后仍开门成功** |
+| 11-11 11:31:15 → 19:54:16 | 仅空闲 8h23m，小部件开门首次返回 `401 登录已超时` |
+| 11-11 19:54:20 | App 启动显示「未登录」→ 旧代码 `clearSession()` 实锤 |
+| 11-11 19:54:44 ~ 19:54:57 | 重新收短信（第二次被限频）→ 登录成功，新凭证 `len36#aaaa1111`，随即开门成功 |
+
+**决定性事实 1 —— 登录响应没有长效凭证**：
+`/api/app/v1/login` 原文 `{"code":0,"data":{"flag":1,"sessionId":"***"},"message":"success"}`，
+只有 `flag` 与 `sessionId`，没有 refresh token / expiresIn / 长效票据。
+短信验证码模型下无法像官方一键登录 SDK 那样静默重登。
+
+**决定性事实 2 —— 更像绝对 TTL，不是空闲超时**：
+空闲 13h36m 仍成功、空闲 8h23m 反而失效，排除「空闲 N 小时过期」；
+首装 11-09 17:37 + 约 48 小时 ≈ 11-11 17:40 到期，19:54 的首次请求即 401，
+与**约 48 小时绝对有效期**吻合（仍属强证据推断，非服务端确认）。
+
+**对上一轮修复的影响（待实测后二选一）**：
+若确为绝对 TTL，30 分钟 `checkLogin` 探活与 4 份小部件的 30 分钟周期唤醒
+**不产生续期效果**，只可能提前发现失效，反而新增后台耗电；方案应改为
+「到期前预警 + 401 不丢凭证 + 一键快速重登」。
+但官方 APK 的 `_updateCacheSessionId` 提示业务响应可能轮换 `sessionId`——
+若有效凭证下 `checkLogin` / `communityInfo` 会下发新票据，就存在滚动续期的可能，
+此时探活仍有价值。**该分支必须用当前有效凭证（19:54:57 写入，预计 ~34 小时后到期）实测**。
+实测需要新包（或临时 debuggable 包用 `run-as` 读 `shared_prefs` 取明文 sessionId）；
+`allowBackup=false`、设备未 root、`adb backup` 不可用，现有安装无法取出明文凭证。
+
+### 2026-11-12 10:07 方案 B 真机实测（有效凭证下 end-to-end 验证）
+
+用户明确授权「打包并覆盖安装验证」/「方案 B」。新包 `qinlin-open.apk` 于 10:07:22 覆盖安装
+（`firstInstallTime` 不变、数据保留），09:47 包备份于
+`E:\WorkBuddy1\2026-11-11-22-25-45\qinlin-open-20261112-0947-backup.apk`。
+
+**诊断入口（DEV-DIAG，全部实验结束后应整体移除）**：不新增任何可见 UI，只在
+`adb shell am start -n com.wb.qinlin/.MainActivity --es diag_action <动作>` 时触发。
+动作：`state / probe / sim401 / mark_expired / clear_expired / retry`。
+代码集中在 `MainActivity.java` 两处 `DEV-DIAG BEGIN/END` 标记块内，联网动作全在后台线程，
+**绝不改动或删除真实 sessionId**；正常启动（不带 extra）完全不受影响。
+（该诊断入口已于 2026-11-12 10:40 随方案 B 整体移除，详见文末。）
+
+| 验证项 | 结果 |
+| --- | --- |
+| `state`（10:07:50） | `session=len36#aaaa1111`、`expired=false`、`loggedIn=true`、`savedAt=11-11 19:54:57`、`lastAlive=lastTry=09:47:55` |
+| **纠正上一轮 BUG 判断** | `lastAlive == lastTry` 且等于 09:47:55 → **09:47 首次启动的探活其实跑了且成功**；之后 19.9 分钟一直落在 30 分钟节流窗口内，后续启动不再发请求，故导出日志里看不到探活。不是「探活未触发」，也不是后台线程被冻结 |
+| `probe` 强制探活（10:08:30） | `POST /api/app/v1/checkLogin` → HTTP 200 / 292ms / `{"code":0,"data":7776000,"message":"操作成功"}`。**接口在有效凭证下完全可用、无需回退 `communityInfo`**；响应**不含 `sessionId`，不轮换票据** → 上一轮「业务响应轮换票据」假设排除 |
+| `sim401`（10:09:18） | 用 `INVALID_DIAG_SESSION_0000` 调只读 `communityInfo` → 服务端真实 `code:401`「您还没有登录，或者登录已超时，请重新登录！」→ `SESSION_EXPIRED` → `handleError()` 后台二次确认 → 真实凭证 `checkLogin code:0` → **判定为网关偶发误判，登录态保留、凭证未删** |
+| `mark_expired`（10:09:51） | 登录态变为「未登录（凭证被判超时，本机凭证仍保留，可点「重试连接」）」，日志明确 `凭证仍在=true`，`session` 指纹不变 |
+| `retry`（10:11:16） | `checkLogin code:0` → `会话探活成功 → 已自动恢复登录态（无需重新短信登录）` → 回到已登录，仍是同一枚 `len36#aaaa1111`；随后 `state` 确认 `expired=false / loggedIn=true` |
+
+**`data:7776000` 的新线索**：10:08:30、10:09:19、10:11:16 三次调用返回值完全相同，
+说明它是**固定配置常量，不是剩余时长**。可能是 90 天（按秒）或 2.16 小时（按毫秒），
+也可能是用户/租户 ID；官方 APK 未硬编码该值（服务端下发），静态只找到 `expireTime` 一处，
+以及 `goSyOneLogin`（一键登录）、`checkLoginAndRedirect`、`get:token`、`TokenType`。
+
+**因此「约 48 小时绝对 TTL」的推断需要重新审视**：若 7776000 是 90 天秒数，
+则 11-11 19:54 的 401 更可能是**同账号在别处重新登录（单点互踢）或服务端会话重置**，
+而非自然到期。「绝对 TTL vs 滑动续期」仍无定论，30 分钟探活是否产生续期效果也仍未证实，
+**暂不改动保活策略**。下一步最有效的判定实验：让用户操作官方 App 重新登录，
+随后立刻用本 APK 发一次只读请求 —— 若立即 401 即为单点互踢，且能免费拿到一次真实 401
+做交叉验证。该动作会提前作废当前仍有效的凭证、需用户配合收验证码，**本轮未执行**。
+
+**抓包可行性（用户问「官方 App 操作重新登录抓信息」）**：设备已装官方 App
+`com.qinlin.edoor` v5.3.2（targetSdk 36、10-26 更新），官方 APK 备份仍在；
+Manifest 未声明 `android:networkSecurityConfig`，自带 xml 只有 `cleartextTrafficPermitted`，
+设备 `no-su` 未 root → Android 7+ 默认不信任用户 CA、Flutter/Dart 不走系统代理，
+**HTTPS 明文抓包在当前设备不可行**（仅某第三方 SDK 的 `bfmob_network_security_config.xml`
+写有 `user` + `trust-anchors` + `overridePins`，不保证作用于主 App）。
+不抓包的替代：官方 App 重登做互踢实验、logcat / dumpsys 观察后台行为、
+从 `libapp.so` 静态提取字段与接口（本轮已做）。
+
+**本轮状态**：改源码 + 编译 + 打包 + 覆盖安装 + 真机验证均完成；**未提交、未发布、未上传**。
+诊断入口仍留在源码与真机包中，待全部实验结束后整体移除并重新打包（需再次明确授权打包）。
+
+### 2026-11-12 10:21 单点互踢实验（决定性结论，推翻「48h 绝对 TTL」）
+
+实验设计：官方 App 重新登录前后，各用自制 APK 对同一枚 `sessionId` 发一次只读
+`checkLogin`，比对状态。基线 10:18:56 `code:0`；用户 10:20:47~10:20:50 在官方 App
+**通过微信 OAuth 完成重新登录**（logcat：`com.tencent.mm/.../SDKOAuthUI` →
+`com.qinlin.edoor/.wxapi.WXEntryActivity`）；10:21:39 自制 APK 同一凭证 → `code:401`。
+
+| 时间 | 观测 |
+| --- | --- |
+| 10:18:56 | 基线：`checkLogin` → `{"code":0,"data":7776000,...}`，`expired=false` |
+| 10:20:47~50 | 官方 App 微信授权重登（登录渠道与短信验证码不同） |
+| 10:21:39 | 自制 APK `aaaa1111` → `code:401`「您还没有登录，或者登录已超时」；`SessionGuard` 标记 `expired=true`，**凭证原样保留** |
+| 10:21:48 | `state`: `session=len36#aaaa1111 / expired=true / loggedIn=false` |
+| 10:22:54 | 真实失效下 `retry` → 仍 `code:401`，只标记过期、凭证保留、不误恢复登录态（行为正确） |
+
+**结论 1（决定性）**：服务端按**账号维度单会话 / 新登录即作废旧凭证**处理。
+连登录渠道都不同（微信 OAuth vs 短信验证码）都能踢掉旧会话，说明不是按渠道隔离。
+官方 APK 里的 `errLoginAlreadyLogin` 也印证服务端存在「已在别处登录」的概念。
+
+**结论 2（推翻上一轮推断）**：11-11 19:54 的 401 **不需要**用「约 48 小时绝对 TTL」解释，
+更可能是同期官方 App 重新登录 / 后台静默重登造成的互踢。
+`checkLogin` 返回的固定 `data:7776000` 若是 90 天（秒），与此一致。
+「绝对 TTL vs 滑动续期」仍无定论，但**无论哪种，30 分钟探活都挡不住互踢**。
+
+**结论 3（原始问题的真正根因）**：官方 App 拥有微信 / 一键登录(SY) / 华为 / 荣耀 /
+Apple 等多种登录渠道（静态提取：`interfaceWxLogin`、`goWxLogin`、
+`interfaceAppLoginBySyToken`、`goSyOneLogin`、`interfaceHwLogin`、`appleLogin`、
+`LoginChannelProxy`、`appWxOpenId`、`unionId`、`getAuthCode`），
+配合 `checkLoginAndRedirect` / `pushLogin` 在会话失效时**静默重登**，用户无感；
+自制 APK 只有短信验证码登录，一旦被踢只能人工收短信。旧代码再把 401 直接
+`clearSession()`，就把「被踢」呈现成不可恢复的「被登出」。
+
+**对修复方案的最终修正**：
+
+- 「401 不丢凭证 + 重试连接 + 到期预警」是必要缓解，但**不能根治互踢**。
+- 30 分钟 `checkLogin` 探活与 4 份小部件 `updatePeriodMillis=1800000` 对互踢毫无作用，
+  反而持续耗电 → **下一版应移除周期轮询，改为按需探活（仅 App 启动 / 回前台 / 开门前）**。
+- 根治只有两条路：① 不同时使用官方 App（尤其不要在官方 App 里重新登录）；
+  ② 复刻静默登录（需微信开放平台 AppID / 签名与亲邻服务端配合，成本与合规风险高，暂不做）。
+- 反向未验证：自制 APK 重新短信登录后是否反过来踢掉官方 App，按单会话推测会。
+
+**当前真机状态**：自制 APK 处于「未登录（凭证被判超时，本机凭证仍保留）」，
+`aaaa1111` 已失效，需重新收一次短信登录才能继续开门。
+
+**日志证据**：`E:\WorkBuddy1\2026-11-11-22-25-45\official-app-relogin-logcat.txt`
+（16,439 行 / 2 MB，含官方 App 微信授权切换轨迹；无 HTTPS 明文，符合「抓包不可行」结论）。
+本轮**未改 Java 源码、未再次打包、未提交、未发布、未上传**。
+
+### 2026-11-12 10:40 方案 B 落地：移除周期轮询，改为按需探活
+
+用户选择方案 B。按互踢实验结论修正实现，**只改源码 + 全量编译，未打包 / 未覆盖安装 /
+未提交**（真机仍是 10:07:22 的包；要打包需用户再次明确授权）。
+
+- 4 份 `res/xml/widget_*_info.xml`：`updatePeriodMillis` 由 `1800000` 改回 `0`，
+  注释改为「服务端按账号单会话，后台探活挡不住互踢，只增耗电」。
+- `OpenWidget.java`：`onUpdate()` 删掉 `goAsync()` + 后台探活线程，恢复为纯重画卡片；
+  移除随之无用的 `BroadcastReceiver` import。点小部件开门前的 `SessionGuard.retry()`
+  保留——那是真正的按需触发。
+- `SessionGuard.java`：类注释重写为「不做定时探活、不做后台唤醒」；
+  `INTERVAL_MS`(30min) → `FOREGROUND_INTERVAL_MS`(5min)，语义从「保活周期」降为
+  「前台防抖」；`keepAlive()` → `probeIfStale()`；`checkLogin` 回退备注改为
+  「真机已确认 code:0，回退仅作兜底」。**401 二次确认 / 凭证保留 / 重试连接逻辑未动**
+  （已端到端验证通过）。
+- `MainActivity.java`：`keepAliveAsync()` → `probeOnForegroundAsync()`（线程名
+  `session-probe`），只在 `onCreate` / `onResume` 调用；`DEV-DIAG` 两处标记块
+  （共 107 行）整体移除，源码中已无 `diag_action` / `runDiag`。
+- 顺带修正 6 处用户提示文案：把「登录已超时」统一改为「登录已失效」，并在启动日志 /
+  重试失败 toast 点明「常见原因：官方 App 重新登录踢掉本会话」，避免误以为是计时到期。
+
+**保留的按需触发点**：冷启动 / 回前台（5 分钟防抖）、401 二次确认（强制）、
+「重试连接」（强制）、小部件开门前（强制）。
+
+**验证**：`aapt2 compile/link` + `javac --release 8` 全量编译通过，`JAVAC_RC=0`，
+99 个 class（仅 deprecation 提示）；残留检查确认 `DEV-DIAG` / `diag_action` /
+`keepAliveAsync` / `SessionGuard.keepAlive` / `1800000` 在 `src` + `res` 中均已清零。
+编译中间产物已清理，`build/` 只剩常规构建产物。
+
+---
+
+## 2026-11-12 10:57 打包并覆盖安装（用户明确授权）
+
+用户明确说「打包并覆盖安装」，本轮执行打包 + `adb install -r`，**未提交、未发布、未上传**
+（HEAD 仍 `ee7848b`）。真机 `示例序列号` 在线。
+
+**产物与回退**：10:07 包备份为
+`E:\WorkBuddy1\2026-11-11-22-25-45\qinlin-open-20261112-1007-backup.apk`；
+新包 `qinlin-open.apk` 10:56:42 构建，87,880 字节，`BUILD_RC=0`，
+apksigner verify v2/v3 = true。安装 `Success`，`lastUpdateTime=10:57:30`，
+`firstInstallTime` 仍 11-09 17:37:07 → **数据完整保留**。
+
+**装包前校验（新包确实含方案 B 改动）**：
+
+| 检查项 | 10:07 旧包 | 10:56 新包 |
+| --- | --- | --- |
+| `classes.dex` | 141,796 B / `e9d8bc22…` | 138,156 B / `e8fff997…` |
+| `diag_action` / `runDiag` | 有 | **无** |
+| `session-keepalive` / `widget-keepalive` 线程 | 有 | **无** |
+| `probeOnForegroundAsync` / `probeIfStale` | 无 | **有** |
+| 4 份 `res/xml/widget_*_info.xml` 含 `1800000` | — | **均 False**（周期值 0） |
+
+**真机冒烟验证（10:57:51 冷启动）**：无崩溃、无 `AndroidRuntime` / `FATAL`；
+启动快照显示凭证 `aaaa1111`、手机号、默认门 `10001/10002`、小区名、门列表缓存全部保留；
+日志自动识别「检测到覆盖安装 / 版本变化」；新文案生效
+（「本机凭证仍在，但上次被服务端判为失效（常见原因：官方 App 重新登录踢掉本会话）」）。
+冷启动按需探活发了**一次** `checkLogin` → 服务端仍返回 `code:401` →
+「只标记过期，本机凭证保留」，与方案 B 设计一致；日志中已无任何诊断入口痕迹。
+
+**遗留（不影响功能）**：`SessionGuard` 的一条**日志措辞**仍是
+「服务端判定登录已超时」，非用户可见提示；如需统一为「失效」，要再次修改 + 重新打包。
+
+---
+
+## 2026-11-12 11:03~11:06 重新登录后的真机回归
+
+用户 11:03 重新短信登录成功，本轮只做**只读观测与回归**，未改源码、未打包、未提交。
+
+**登录链路**（新包 10:57 版）：11:03:00 收短信 `code:0` → 11:03:06
+`POST /api/app/v1/login` `code:0` → 新凭证 `bbbb2222`，日志
+「登录响应字段=["flag","sessionId"]」——**再次确认无 refresh / expiresIn 等长效票据**；
+11:03:07 `communityInfo` `code:0`、小区名补齐「示例小区A」；登录态 → 已登录。
+界面显示「已登录 · 138****0000」、默认门 `10001/10002`、开门记录均在。
+
+**回归结果**：
+
+| 项 | 结果 |
+| --- | --- |
+| 401 链路（真实失效、非模拟） | 10:57:51 冷启动、11:02:59 各一次 `checkLogin → code:401` → 均「只标记过期，本机凭证保留」，**未删 sessionId**；用户重登后状态正常复位 |
+| 前台 5 分钟防抖 | 11:05:54 `force-stop` 后重启，`checkLogin` 请求数 **0**（登录时 `setSession` 重置 `last_keep_alive`，防抖命中）；登录态正确恢复为「已登录，`bbbb2222`」 |
+| 周期轮询已关闭 | 真机 `dumpsys appwidget` 显示 4 个 provider 全部 `updatePeriodMillis=0`，`zombie=false` |
+| 稳定性 | 无 `FATAL` / `AndroidRuntime`；启动到首帧 123ms |
+
+**小瑕疵（不影响功能，待下次打包修）**：登录成功瞬间门卡片的
+「门 ID … · 会话保存于 …」由 `refreshDoorLabel()` 在 `onCreate` 渲染，登录回调只调了
+`applyLoginState()` 未刷新该行，因此短暂显示旧的「昨天 19:54」；数据本身正确
+（启动快照写入时间 `2026-11-12 11:03:06`），重启 Activity 后即按新值渲染。
+
+**⚠️ 新发现（待排查）：已登录态下「前台按需探活」未观察到触发。**
+11:05:54 / 11:08:05 / 11:08:47 / 11:10:42 / 11:12:18 共 5 次 `force-stop` 后重启
+（含唤醒屏幕、防抖窗口 11:08:06 之后、单次等待 15 秒），`checkLogin` 请求数均为 **0**，
+且无任何线程异常。已排除：字节码确认 `onCreate` / `onResume` **无条件**启动
+`session-probe` 线程、线程直接调 `probeIfStale(c,false)`、
+`FOREGROUND_INTERVAL_MS=300000` 与源码一致；`javap` 也确认防抖分支是**静默 return**
+（不写日志）。对照：10:57:51 与 11:02:59 两次 `sessionExpired=true` 的失效态下，
+`checkLogin` 都确实发出了。推断是 `probe()` 命中了防抖分支，
+`last_keep_alive` / `last_keep_alive_try` 的实际值需读 SharedPreferences 才能定论
+（本机未 root、App 非 debuggable、`allowBackup=false`，暂取不到）。
+**影响有限**：401 二次确认 /「重试连接」/ 小部件开门前探活都是 `force=true`，
+已在真机端到端验证；`force=false` 的前台探活只承担「提前发现被踢」，不触发不影响开门。
+下次打包可加一行诊断日志打印两个时间戳与防抖判定结果以定位。
+
+**仍未验证**：有效凭证下新包 `checkLogin` 的 `code:0`（10:08 诊断包已确认接口返回
+`{"code":0,"data":7776000}`，该逻辑未改动）、实际物理开门、耗电对比。
+
+**反向互踢实验窗口已打开但有代价**：我们 11:03:06 新登录按单会话推测会踢掉官方 App，
+但官方 App 有多套静默重登渠道，一旦自愈会**反踢我们的 `bbbb2222`**，届时又需重收短信。
+是否做由用户决定，本轮未操作官方 App。
+
+---
+
+## 2026-11-12 11:17~11:25 再次打包（用户明确授权「打包并覆盖安装」）
+
+上轮留下两项「待下次打包修」，本轮一并处理后再构建；**未提交、未发布、未上传**
+（HEAD 仍 `ee7848b`）。
+
+**源码改动（3 处，均为上轮已记录的待办）**：
+
+| 文件 | 改动 | 解决 |
+| --- | --- | --- |
+| `MainActivity.java` | 登录成功回调 `applyLoginState()` 后补 `refreshDoorLabel()` | 登录瞬间门卡片「会话保存于」不再短暂显示旧时间 |
+| `SessionGuard.java` | 401 日志措辞「服务端判定登录已超时」→「服务端判定凭证已失效」 | 与界面文案统一 |
+| `SessionGuard.java` | `probe()` 非 force 分支新增一条 `前台探活判定` 日志：`now` / `lastAlive` / `lastTry` / 距上次 ms / 阈值 / 判定结果 | 定位「已登录态回前台 5 次重启 0 次 checkLogin」，区分防抖命中与线程未启动；只记时间戳、不含凭证，**不是诊断入口** |
+
+**构建**：`python build-apk.py` 全链路 rc=0；`qinlin-open.apk` 87,880 bytes，
+v2/v3 = true，签名证书 SHA-256 `47d376a0…681`（与现网同一把 debug key，**可直接覆盖、不丢凭证**）。
+`classes.dex` 138,580 B / `87dab290a46c`。
+
+**装包前校验**：
+
+| 检查项 | 结果 |
+| --- | --- |
+| `diag_action` / `runDiag` / `session-keepalive` / `widget-keepalive` | 均 False（诊断入口与后台线程未回归） |
+| `probeOnForegroundAsync` / `probeIfStale` / `前台探活判定` | 均 True（方案 B + 本轮日志已进包） |
+| 4 份 `res/xml/widget_*_info.xml` 的 `updatePeriodMillis` | 全部 `0`（`aapt2 dump xmltree` 实测） |
+
+**回退备份**：现网 10:56 包复制到
+`E:\WorkBuddy1\2026-11-11-22-25-45\qinlin-open-20261112-1056-backup.apk`（MD5 `015d6a67…`）。
+
+**⚠️ 覆盖安装未完成（真机掉线）**：11:17 首次 `adb devices -l` 仍能看到 `示例序列号`，
+但 11:24 起设备 USB 断开：`adb devices` 空、`adb get-state` 报 no devices，
+`adb kill-server/start-server`、`adb reconnect` 均无效；Windows
+`Get-PnpDevice -PresentOnly` 已无 `示例设备` / `Android Composite ADB Interface` 节点
+（只剩残留的非 Present 记录）。沙箱内外、Bash / PowerShell 两种通道结果一致 →
+**不是 adb 或权限问题，是物理连接 / 设备端 USB 调试掉了**。
+新包已构建签名完毕但**未安装**，真机仍是 10:57:30 的 10:56 版。
+
+**待用户重新插线后的操作清单**：
+
+1. 重新插 USB 数据线、解锁屏幕、在「允许 USB 调试吗」弹窗点允许；USB 模式选「文件传输」。
+2. `adb devices -l` 确认 `示例序列号 device` → `adb install -r qinlin-open.apk` →
+   确认 `Success`、`lastUpdateTime` 更新而 `firstInstallTime` 仍 11-09 17:37:07。
+3. 冷启动后查日志 `前台探活判定`：若「超出防抖窗口，发起 checkLogin」，可顺带补上
+   「有效凭证下 `checkLogin code:0`」这个仍未验证项；若一直「命中防抖」，
+   读 `lastAlive` / `lastTry` 差值定位为何时间戳被反复刷新。
+4. 核对登录态 `bbbb2222`、小区名、默认门、开门记录均保留；无 `FATAL`。
+5. 回退：`adb install -r <10:56 备份包>`（同证书，数据不丢）。
+
+---
+
+## 2026-11-12 11:33~11:35 覆盖安装完成 + 真机冒烟（11:17 段阻塞已解除）
+
+用户重新连接真机，`adb devices -l` 恢复 `示例序列号 device`。本轮执行
+`adb install -r qinlin-open.apk` → `Success`；**未提交、未发布、未上传**（HEAD `ee7848b`）。
+
+**安装校验**：`lastUpdateTime=11:33:57`（由 10:57:30 更新），`firstInstallTime` 仍
+11-09 17:37:07 → 数据完整保留；设备 `base.apk` 与本地新包 MD5 同为 `57ead58f…`，
+确认装入的就是本轮构建产物。启动快照显示凭证 `bbbb2222`、手机号 `138****0000`、
+默认门 `10001/10002`、小区名「示例小区A」、openid `cccc3333` 全部保留，
+日志正确识别「检测到覆盖安装 / 版本变化」。启动到首帧 104ms，无 `FATAL` / `AndroidRuntime`。
+
+**补齐「有效凭证下 checkLogin」验证**：11:34:28 冷启动，新增的 `前台探活判定` 日志给出
+`lastAlive=lastTry=11:17:25`、距上次 1,022,528ms > 阈值 300,000ms
+→「超出防抖窗口，发起 checkLogin」→ `POST /api/app/v1/checkLogin` →
+HTTP 200 `{"code":0,"data":7776000,"message":"操作成功"}` →
+「会话探活成功（checkLogin），服务端凭证仍有效」。
+**这是新包在有效凭证下的首次真机 `code:0`**（此前只在 10:08 诊断包验过）。
+紧接着 `onResume` 的第二次调用显示「距上次=279ms → 命中防抖，跳过本次请求」，
+两条分支都符合设计。上轮「已登录态 5 次重启 0 次 checkLogin」的疑点由此闭环：
+时间戳表明 11:17:25 曾有一次成功探活刷新 `last_keep_alive*`，那段时间的反复重启
+都落在 5 分钟防抖窗口内，并非线程未启动或逻辑失效；今后任何「0 次请求」都能
+直接从这条日志判定，无需再读 SharedPreferences。
+
+**真机小部件周期**：`dumpsys appwidget` 中 `com.wb.qinlin` 的 4 个 provider
+（`OpenWidget` / `Square` / `Mini` / `Bar`）全部 `updatePeriodMillis=0`、`zombie=false`，
+无后台周期唤醒。
+
+**仍未验证 / 本轮未触发**：
+- 登录成功瞬间门卡片「会话保存于」刷新（本轮未重新登录，需下次短信登录时确认）。
+- 实际物理开门、耗电对比、反向互踢（用户未要求，未操作官方 App）。
+
+日志留存：`E:\WorkBuddy1\2026-11-11-22-25-45\qinlin-install-1133-logcat.txt`。
+回退包：`qinlin-open-20261112-1056-backup.apk`（同证书，可直接 `adb install -r`）。

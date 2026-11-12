@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   小部件声明：4x2（minWidth/minHeight 按「4 格 × 70dp - 30dp」算）。
-  updatePeriodMillis=0：不做定时唤醒。内容只在「开门 / 换门 / 回到 App」时刷新，
-  这项不存在后台轮询，因此不额外耗电。
+  updatePeriodMillis=0：不定时唤醒、不发后台请求。真机验证服务端按账号单会话，
+  官方 App 重新登录即作废旧凭证，后台探活挡不住互踢，只会白耗电。
+  卡片只在开门 / 换门 / 回到 App 时刷新；会话检查同样只在这些按需时刻触发。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc"

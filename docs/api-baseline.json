@@ -63,6 +63,14 @@
   "role": "fallback",
   "state": "ALIVE"
  },
+ "/api/app/v1/checkLogin": {
+  "code": "401",
+  "http": "200",
+  "message": "您还没有登录，或者登录已超时，请重新登录！",
+  "note": "会话探活（只读）",
+  "role": "primary",
+  "state": "ALIVE"
+ },
  "/api/app/v1/login": {
   "code": "121",
   "http": "200",

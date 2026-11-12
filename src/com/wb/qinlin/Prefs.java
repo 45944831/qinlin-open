@@ -27,6 +27,8 @@ public final class Prefs {
         sp(c).edit().putString("session", v)
                 .putLong("session_at", System.currentTimeMillis())
                 .putString("session_openid_fp", AppLog.fp(openid(c)))
+                .putBoolean("session_expired", false)
+                .putLong("last_keep_alive", System.currentTimeMillis())
                 .apply();
     }
     public static long sessionSavedAt(Context c) { return sp(c).getLong("session_at", 0); }
@@ -41,7 +43,58 @@ public final class Prefs {
     public static void clearSession(Context c) {
         sp(c).edit().remove("session").remove("cname")
                 .remove("session_at").remove("session_openid_fp")
-                .remove("door_cache").remove("w_last").apply();
+                .remove("door_cache").remove("w_last")
+                .remove("session_expired").remove("last_keep_alive")
+                .remove("last_keep_alive_try").remove("login_data").apply();
+    }
+
+    // ---------- 会话过期标记与探活（与「退出登录」严格区分） ----------
+
+    /**
+     * 服务端判定「登录已超时」时只打标记、不删凭证：
+     * 网关偶发误判或网络恢复后，一次探活就能自动回到登录态，用户不必重新收短信。
+     * 只有用户主动点「退出登录」才真正 clearSession()。
+     */
+    public static boolean sessionExpired(Context c) {
+        return sp(c).getBoolean("session_expired", false);
+    }
+
+    public static void setSessionExpired(Context c, boolean v) {
+        sp(c).edit().putBoolean("session_expired", v).apply();
+    }
+
+    /** 界面判定登录态：有凭证且未被标记过期。 */
+    public static boolean loggedIn(Context c) {
+        return session(c).length() > 0 && !sessionExpired(c);
+    }
+
+    /** 上次探活成功时间；用于前台节流，避免每次 onResume 都发请求。 */
+    public static long lastKeepAlive(Context c) {
+        return sp(c).getLong("last_keep_alive", 0);
+    }
+
+    public static void setLastKeepAlive(Context c, long v) {
+        sp(c).edit().putLong("last_keep_alive", v).apply();
+    }
+
+    /** 上次探活尝试时间（含失败），避免断网时每 30 分钟被反复唤醒也只记一次。 */
+    public static long lastKeepAliveTry(Context c) {
+        return sp(c).getLong("last_keep_alive_try", 0);
+    }
+
+    public static void setLastKeepAliveTry(Context c, long v) {
+        sp(c).edit().putLong("last_keep_alive_try", v).apply();
+    }
+
+    /**
+     * 登录接口 data 的完整原文（只存本机，不上传、不进日志）。
+     * 当前只用 sessionId；留着它是为了日后确认上游是否下发长效凭证 / 续期票据，
+     * 有了它才有可能像官方 App 那样静默续期，而不是每次超时都收短信。
+     */
+    public static String loginData(Context c) { return sp(c).getString("login_data", ""); }
+
+    public static void setLoginData(Context c, String v) {
+        sp(c).edit().putString("login_data", v == null ? "" : v).apply();
     }
 
     /**
