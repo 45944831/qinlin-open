@@ -1428,3 +1428,47 @@ HTTP 200 `{"code":0,"data":7776000,"message":"操作成功"}` →
 - `fresh()` 短路后，服务端撤销门禁权限最多 10 分钟内本机不刷新，需用户主动点「↻ 刷新门列表」。
 - `LogActivity` 有 `configChanges` 但无 `onConfigurationChanged`（HEAD 既有，非本批次引入），
   旋转后浮层尺寸不重算；`MainActivity` 的旋转重定位在 `centering=true` 时序下可能偶发跳过。
+
+## 2026-11-16 · 全网开源调研后的五项优化（P1–P5）
+
+调研 QinlinOpen（rponeawa 原版 / Presley-Liang 最新 fork，同源协议）后落地五项优化。
+调研报告：`E:\WorkBuddy1\2026-11-11-22-25-45\亲邻开源项目调研与优化建议-20261116.md`。
+
+**P1 凭证 Keystore 加密**（新增 `SecureStore.java`）：
+- AndroidKeyStore AES-GCM，密钥别名 `qinlin_creds_v1`，256 位、随机 IV，密文格式 `enc:v1:<iv>:<ct>`。
+- `Prefs` 的 `session` / `login_data` / `phone` 三个敏感字段改走加密层，对外 API 不变，其余代码零改动。
+- 安全降级：Keystore 不可用 / 密文损坏时原样返回明文或默认值，绝不因加密故障丢登录态；
+  写入失败回退明文。`Prefs.migrateSecureFields()` 在 MainActivity.onCreate 调用，把历史明文一次性升级为密文（幂等）。
+
+**P2 门列表接口兜底**：主接口 `queryAllUserDoorByCache` 仍优先；返回空/异常时用 QinlinOpen 所用的
+`queryUserDoorByCacheNew` 兜底。`parseDoors()` 兼容扁平数组与旧分组对象两种 data 结构。
+无凭证环境无法 A/B 实测，故保守地「主接口优先 + New 兜底」，避免引入回归。
+
+**P3 协议头对齐**：`qversioncode` 3113→3146、`qversionname` 4.9.3→5.2.6、UA Dart/2.18→Dart/3.8，
+签名体 version 同步改 5.2.6。依据是 QinlinOpen 用完全相同的 salt/key/接口以此版本验证过开门。
+官方最新 5.3.2=3152 尚未在开源实现验证，未采用；qchannel/qvendor 涉风控指纹，保持历史验证值。
+
+**P4 每个小组件独立绑定门**：
+- `Prefs.widgetDoor(appWidgetId)` 加密存储每 widget 的门（cid/did/name/kind）。
+- `OpenWidget.boundDoor()` 优先用绑定门、未绑定回退全局默认门（向后兼容老 widget）。
+- build/readState/openNow 全链路带 appWidgetId；PendingIntent requestCode 分段（开门 4xxxx / 配置 5xxxx）避免串号。
+- 点门名/头部进「小部件配置模式」（复用 DoorListActivity + EXTRA_WIDGET_ID），只绑定该 widget、不改全局默认门；
+  主按钮仍直接开门；onDeleted 清理绑定。
+
+**P5 开门历史仅成功才记**：`noteResult()` 失败不再写 `open_records.jsonl`（失败详情仍完整保留在 AppLog），
+小卡片状态成功/失败都更新；新增带门名重载，小部件开门用绑定门名写记录。
+
+**验证**：全量 `javac --release 8` 编译通过，**105 个 class**；无残留旧签名/旧常量；
+临时编译目录已清理。真机为另一台设备（示例设备 / 示例序列号B），未装亲邻/自制 App、无有效凭证，
+故 P2 实测对比、P3 实机开门、P4 真机多门配置均**待真机验证**；P1 迁移做了静态审查（回退路径与旧行为一致）。
+
+## 2026-11-16 · 打包交付真机验证（用户明确要求「打个包 我真机验证」）
+- 用 `build-apk.py` 全量重建（资源 → javac 105 class → d8 → zipalign → 调试签名），
+  产物 `qinlin-open.apk` 96,072 字节，apksigner verify 通过（v2 + v3，1 signer）。
+- 真机 `示例序列号B` 已 `adb install -r` 覆盖安装成功，`pm path com.wb.qinlin` 确认包存在。
+- 本包含 P1–P5 全部改动（Keystore 加密凭证 / 门列表 New 接口兜底 / 协议头 5.2.6+3146 /
+  每 widget 独立绑定门 / 仅成功写开门历史）。签发仍是本地 debug keystore，与线上旧包同签名，可覆盖安装。
+- **未提交、未推送**；HEAD 仍 `14430f5`，源码改动保留在工作区。
+- 真机验证重点：① 覆盖安装后旧明文凭证是否自动迁移、是否仍保持登录；② P3 新协议头下能否正常
+  拉门列表 / 开门；③ 多小组件各自绑定不同门、点击主按钮是否开对应门；④ 失败开门不写历史；
+  ⑤ 官方 App 重登后本 App 是否仍按 401 二次确认提示（不再静默登出）。

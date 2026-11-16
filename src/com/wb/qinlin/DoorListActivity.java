@@ -1,6 +1,7 @@
 package com.wb.qinlin;
 
 import android.app.Activity;
+import android.appwidget.AppWidgetManager;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -30,6 +31,9 @@ public class DoorListActivity extends Activity {
     /** true = 首次登录引导：请用户先确认要控制的门，选完才进主界面。 */
     public static final String EXTRA_ONBOARDING = "onboarding";
 
+    /** 桌面小部件配置：带有效 appWidgetId 时，选门只绑定该小部件，不改全局默认门。 */
+    public static final String EXTRA_WIDGET_ID = "widget_id";
+
     private TextView subtitleTv;
     private TextView statusTv;
     private LinearLayout doorsBox;
@@ -38,6 +42,7 @@ public class DoorListActivity extends Activity {
     /** 标题行关闭入口：引导模式默认隐藏，无门可选时才显示。 */
     private TextView closeTv;
     private boolean onboarding;
+    private int configuringWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
     private long lastBackAt;
 
     @Override
@@ -47,9 +52,13 @@ public class DoorListActivity extends Activity {
         QinlinApi.setOpenid(Prefs.openid(this));
         QinlinApi.PREFERRED_COMM_MODE = Prefs.commMode(this);   // 沿用上次成功的小区请求姿势
         onboarding = getIntent().getBooleanExtra(EXTRA_ONBOARDING, false);
-        AppLog.i(AppLog.DOORS, onboarding
-                ? "打开悬浮门列表（首次登录引导：先选门再进主界面）"
-                : "打开悬浮门列表二级界面");
+        configuringWidgetId = getIntent().getIntExtra(EXTRA_WIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID);
+        AppLog.i(AppLog.DOORS, configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID
+                ? "打开门列表（小部件配置 widgetId=" + configuringWidgetId + "）"
+                : onboarding
+                    ? "打开悬浮门列表（首次登录引导：先选门再进主界面）"
+                    : "打开悬浮门列表二级界面");
         setupFloatingWindow();
         buildUi();
         loadDoors();
@@ -105,7 +114,8 @@ public class DoorListActivity extends Activity {
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.addView(label(onboarding ? "选择要控制的门" : "门列表", 21,
+        boolean widgetConfig = configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID;
+        titleRow.addView(label(widgetConfig ? "为小组件选门" : onboarding ? "选择要控制的门" : "门列表", 21,
                         Color.parseColor("#16233B"), true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         closeTv = label("✕ 关闭", 14, Color.parseColor("#1B3A6B"), true);
@@ -124,9 +134,11 @@ public class DoorListActivity extends Activity {
         titleRow.addView(closeTv);
         card.addView(titleRow);
 
-        TextView tip = label(onboarding
-                        ? "首次登录 · 选一扇门作为默认开门，选好后直接进入主界面"
-                        : "点一扇门即显示到主界面 · 点卡片外可收起",
+        TextView tip = label(widgetConfig
+                        ? "点一扇门，把它绑定到此小组件（其他小组件不受影响）"
+                        : onboarding
+                            ? "首次登录 · 选一扇门作为默认开门，选好后直接进入主界面"
+                            : "点一扇门即显示到主界面 · 点卡片外可收起",
                 12, Color.parseColor("#607089"), false);
         tip.setPadding(0, dp(2), 0, 0);
         card.addView(tip);
@@ -381,6 +393,15 @@ public class DoorListActivity extends Activity {
             @Override public void run() {
                 doorsBox.removeAllViews();
                 int selected = Prefs.doorId(DoorListActivity.this);
+                if (configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                    // 配置模式：高亮该 widget 当前绑定的门，而不是全局默认门
+                    try {
+                        org.json.JSONObject jo = new org.json.JSONObject(
+                                Prefs.widgetDoor(configuringWidgetId, DoorListActivity.this));
+                        selected = jo.optInt("did", selected);
+                    } catch (Throwable ignored) {
+                    }
+                }
                 String lastKind = "";
                 for (final QinlinApi.Door d : doors) {
                     if (!d.kind.equals(lastKind)) {
@@ -398,6 +419,27 @@ public class DoorListActivity extends Activity {
                     b.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View v) {
                             String plain = d.plainLabel();
+                            if (configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                                // 小部件配置模式：只绑定该 widget，不改全局默认门
+                                try {
+                                    org.json.JSONObject jo = new org.json.JSONObject();
+                                    jo.put("cid", d.communityId);
+                                    jo.put("did", d.id);
+                                    jo.put("n", plain);
+                                    jo.put("k", d.kind);
+                                    Prefs.setWidgetDoor(configuringWidgetId,
+                                            DoorListActivity.this, jo.toString());
+                                    OpenWidget.refreshAll(DoorListActivity.this);
+                                    AppLog.ok(AppLog.DOORS, "小部件 " + configuringWidgetId
+                                            + " 已绑定门 id=" + d.id + " cid=" + d.communityId
+                                            + " | 名称=" + plain);
+                                } catch (Exception ex) {
+                                    AppLog.e(AppLog.ERR, "小部件绑定门失败 " + AppLog.stack(ex));
+                                }
+                                toast("小部件已绑定：" + plain);
+                                finish();
+                                return;
+                            }
                             Prefs.setDoor(DoorListActivity.this,
                                     d.communityId, d.id, plain);
                             Prefs.setDoorMeta(DoorListActivity.this, d.kind, d.online);

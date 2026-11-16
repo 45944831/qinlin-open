@@ -180,11 +180,14 @@ public final class QinlinApi {
         LinkedHashMap<String, String> h = new LinkedHashMap<String, String>();
         h.put("qvendor", "Xiaomi");
         h.put("openid", openid());
-        h.put("qversioncode", "3113");
-        h.put("qversionname", "4.9.3");
+        // 版本头对齐到 QinlinOpen 已验证的 5.2.6/3146（与本项目同一套 salt/key/接口），
+        // 比旧的 4.9.3/3113 更贴近当前官方，降低被当作陈旧客户端区别对待的风险。
+        // 官方 5.3.2=3152 尚未在开源实现中验证过，暂不采用；qchannel/qvendor 涉及风控指纹，保持历史验证值不动。
+        h.put("qversioncode", "3146");
+        h.put("qversionname", "5.2.6");
         h.put("qchannel", "xiaomi");
         h.put("qplatform", "0");
-        h.put("user-agent", "Dart/2.18 (dart:io)");
+        h.put("user-agent", "Dart/3.8 (dart:io)");
         return h;
     }
 
@@ -392,7 +395,7 @@ public final class QinlinApi {
         TreeMap<String, String> body = new TreeMap<String, String>(fields);
         body.put("timestamp", String.valueOf(System.currentTimeMillis()));
         body.put("nonce", String.valueOf(RND.nextInt(90000) + 10000));
-        body.put("version", "4.9.3");
+        body.put("version", "5.2.6");   // 与 deviceHeaders().qversionname 一致（对齐已验证的 QinlinOpen 协议）
 
         TreeMap<String, String> signed = new TreeMap<String, String>();
         signed.put("token", token == null ? "" : token);
@@ -636,37 +639,62 @@ public final class QinlinApi {
                 + " | session=" + AppLog.fp(token));
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("communityId", String.valueOf(communityId));
-        Object data = post("/api/app/user/v2/queryAllUserDoorByCache", f, token, "form");
         List<Door> out = new ArrayList<Door>();
-        if (!(data instanceof JSONObject)) {
-            AppLog.w(AppLog.DOORS, "门列表响应 data 非对象，返回空列表 communityId=" + communityId);
-            return out;
+        try {
+            Object data = post("/api/app/user/v2/queryAllUserDoorByCache", f, token, "form");
+            parseDoors(data, communityId, out);
+        } catch (Exception e) {
+            AppLog.w(AppLog.DOORS, "主门列表接口失败，尝试 New 接口：" + e.getMessage());
         }
-        JSONObject o = (JSONObject) data;
-        String[] keys = {"buildingDoorList", "gateDoorList", "customDoorList", "userDoorDTOS"};
-        for (String key : keys) {
-            JSONArray arr = o.optJSONArray(key);
-            if (arr == null) continue;
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject d = arr.optJSONObject(i);
-                if (d == null) continue;
-                int id = d.optInt("doorControlId", -1);
-                if (id <= 0) continue;
-                String name = d.optString("doorControlName", "门禁 " + id);
-                // 上游按「区域」分组返回，保留分组语义供 UI 分区展示
-                String kind = "gateDoorList".equals(key) ? "小区门"
-                        : "buildingDoorList".equals(key) ? "楼栋门"
-                        : "customDoorList".equals(key) ? "自定义门" : "其他门";
-                boolean dup = false;
-                for (Door existing : out) if (existing.id == id) { dup = true; break; }
-                if (!dup) {
-                    String online = d.optString("online", "");
-                    out.add(new Door(communityId, id, name, kind, online));
-                }
+        // 主接口返回空或失败：用 QinlinOpen 所用的 *ByCacheNew 接口兜底。
+        // 无凭证环境无法 A/B 实测，故保留主接口优先、New 仅兜底，避免引入回归。
+        if (out.isEmpty()) {
+            try {
+                Object data = post("/api/app/user/v2/queryUserDoorByCacheNew", f, token, "form");
+                parseDoors(data, communityId, out);
+                if (!out.isEmpty()) AppLog.ok(AppLog.DOORS, "New 接口兜底成功，返回 " + out.size() + " 扇门");
+            } catch (Exception e) {
+                AppLog.w(AppLog.DOORS, "New 门列表接口也失败：" + e.getMessage());
             }
         }
         AppLog.i(AppLog.DOORS, "门列表返回 " + out.size() + " 扇门 communityId=" + communityId);
         return out;
+    }
+
+    /** 解析门列表：兼容新的扁平数组与旧的分组对象两种 data 结构。 */
+    private static void parseDoors(Object data, int communityId, List<Door> out) {
+        if (data instanceof JSONArray) {
+            JSONArray arr = (JSONArray) data;
+            for (int i = 0; i < arr.length(); i++) {
+                addDoor(arr.optJSONObject(i), communityId, "门", out);
+            }
+            return;
+        }
+        if (!(data instanceof JSONObject)) {
+            AppLog.w(AppLog.DOORS, "门列表响应 data 非对象/数组，跳过");
+            return;
+        }
+        JSONObject o = (JSONObject) data;
+        String[] keys = {"buildingDoorList", "gateDoorList", "customDoorList", "userDoorDTOS",
+                "doorList", "doors", "data", "list"};
+        for (String key : keys) {
+            JSONArray arr = o.optJSONArray(key);
+            if (arr == null) continue;
+            String kind = "gateDoorList".equals(key) ? "小区门"
+                    : "buildingDoorList".equals(key) ? "楼栋门"
+                    : "customDoorList".equals(key) ? "自定义门" : "门";
+            for (int i = 0; i < arr.length(); i++) addDoor(arr.optJSONObject(i), communityId, kind, out);
+        }
+    }
+
+    private static void addDoor(JSONObject d, int communityId, String kind, List<Door> out) {
+        if (d == null) return;
+        int id = d.optInt("doorControlId", -1);
+        if (id <= 0) return;
+        String name = d.optString("doorControlName", d.optString("doorName", "门禁 " + id));
+        for (Door existing : out) if (existing.id == id) return;
+        String online = d.optString("online", "");
+        out.add(new Door(communityId, id, name, kind, online));
     }
 
     /**

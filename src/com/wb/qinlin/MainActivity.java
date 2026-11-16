@@ -191,6 +191,7 @@ public class MainActivity extends Activity {
         createT0 = System.currentTimeMillis();
         super.onCreate(savedInstanceState);
         AppLog.init(this);
+        Prefs.migrateSecureFields(this);   // 历史明文凭证一次性升级为 Keystore 密文（幂等、不丢数据）
         QinlinApi.setOpenid(Prefs.openid(this));
         QinlinApi.PREFERRED_COMM_MODE = Prefs.commMode(this);   // 沿用上次成功的小区请求姿势
         buildUi();

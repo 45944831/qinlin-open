@@ -43,8 +43,10 @@ public class OpenWidget extends AppWidgetProvider {
     static final String FROM_WIDGET = OpenRecord.FROM_WIDGET;
     static final String FROM_APP = OpenRecord.FROM_APP;
 
-    private static final int REQ_OPEN = 3201;
-    private static final int REQ_APP = 3202;
+    // requestCode 分段：开门 4xxxx、配置 5xxxx，各自再叠加 widgetId，避免不同 widget/动作互相覆盖
+    private static final int REQ_OPEN = 40000;
+    private static final int REQ_APP = 3999;
+    private static final int REQ_CONFIG = 50000;
 
     private static final int MODE_NORMAL = 0;
     private static final int MODE_BUSY = 1;
@@ -73,12 +75,25 @@ public class OpenWidget extends AppWidgetProvider {
         update(context, mgr, ids, style());
     }
 
+    @Override
+    public void onDeleted(Context context, int[] appWidgetIds) {
+        // 小部件从桌面移除：清掉各自的门绑定，避免残留（四种 provider 都会继承此方法）
+        if (appWidgetIds == null) return;
+        Context c = context.getApplicationContext();
+        for (int id : appWidgetIds) {
+            try {
+                Prefs.clearWidgetDoor(id, c);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     private static void update(Context ctx, AppWidgetManager mgr, int[] ids, int style) {
         if (ids == null || ids.length == 0) return;
         Context c = ctx.getApplicationContext();
         for (int id : ids) {
             try {
-                mgr.updateAppWidget(id, build(c, MODE_NORMAL, style));
+                mgr.updateAppWidget(id, build(c, MODE_NORMAL, style, id));
             } catch (Throwable ignored) {
             }
         }
@@ -96,19 +111,30 @@ public class OpenWidget extends AppWidgetProvider {
     }
 
     /**
-     * 记录一次开门结果（成功 / 失败都记），一次写两份：
-     * ① 本机开门记录文件 —— 主界面「最近开门记录 / 今日开门 / 上次开门」读它；
-     * ② 桌面卡片「上次：…」状态。
+     * 记录一次开门结果。只写两份中的相关部分：
+     * ① 本机开门记录文件 —— 仅「成功」才写（对齐 QinlinOpen：失败尝试不刷屏历史，
+     *    失败详情仍完整保留在 AppLog 里，可随时查看）；主界面「今日开门」等只读这个文件；
+     * ② 桌面卡片「上次：…」状态 —— 成功失败都更新，让卡片即时反馈本次结果。
      *
      * 应用内开门也走这里，两个入口共用同一个写入点，不会再出现「小部件开了门但 App 里查不到」。
      */
     static void noteResult(Context c, boolean ok, String text, int costMs, String from) {
+        noteResult(c, ok, text, costMs, from, null);
+    }
+
+    /** 带门名的版本：小部件开门用绑定门名写记录，避免多个门共用默认门文案。 */
+    static void noteResult(Context c, boolean ok, String text, int costMs, String from,
+                           String doorNameOverride) {
         inFlight = 0L;
-        try {
-            OpenRecord.add(c, ok, costMs, recordDoor(c),
-                    text == null ? "" : text, from == null ? "" : from);
-        } catch (Throwable ignored) {
-            // 记录写入失败绝不能影响开门结果本身
+        if (ok) {
+            try {
+                String doorName = (doorNameOverride != null && doorNameOverride.length() > 0)
+                        ? shortName(doorNameOverride) : recordDoor(c);
+                OpenRecord.add(c, true, costMs, doorName,
+                        text == null ? "" : text, from == null ? "" : from);
+            } catch (Throwable ignored) {
+                // 记录写入失败绝不能影响开门结果本身
+            }
         }
         try {
             Prefs.setWidgetLast(c, (ok ? "1" : "0") + "|" + System.currentTimeMillis()
@@ -157,7 +183,7 @@ public class OpenWidget extends AppWidgetProvider {
             if (ids == null || ids.length == 0) return;   // 这种样式桌面上没放，跳过
             for (int id : ids) {
                 try {
-                    mgr.updateAppWidget(id, build(c, mode, style));
+                    mgr.updateAppWidget(id, build(c, mode, style, id));
                 } catch (Throwable ignored) {
                 }
             }
@@ -172,7 +198,12 @@ public class OpenWidget extends AppWidgetProvider {
     }
 
     static RemoteViews build(Context c, int mode, int style) {
-        State s = readState(c, mode);
+        return build(c, mode, style, AppWidgetManager.INVALID_APPWIDGET_ID);
+    }
+
+    /** 带 appWidgetId 的构建：读取该 widget 绑定的门（未绑定回退全局默认门）。 */
+    static RemoteViews build(Context c, int mode, int style, int appWidgetId) {
+        State s = readState(c, mode, appWidgetId);
         switch (style) {
             case STYLE_SQUARE:
                 return buildSquare(c, s);
@@ -187,6 +218,7 @@ public class OpenWidget extends AppWidgetProvider {
 
     /** 四种样式共享的状态读取：门名 / 是否就绪 / 是否开门中 / 上次结果文案。 */
     private static final class State {
+        int appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
         boolean logged;
         boolean ready;
         boolean busy;
@@ -196,12 +228,50 @@ public class OpenWidget extends AppWidgetProvider {
         int stateColor = 0xFF5A6B85;
     }
 
-    private static State readState(Context c, int mode) {
+    /** 某个 widget 实际要控制的门：优先用绑定门，未绑定回退全局默认门。 */
+    static final class BoundDoor {
+        int cid;
+        int did;
+        String name = "";
+        String kind = "";
+        boolean bound;   // true=该 widget 显式绑定过；false=回退默认门
+    }
+
+    /** 解析 widget 绑定门；JSON 损坏或未绑定时安全回退全局默认门。 */
+    static BoundDoor boundDoor(Context c, int appWidgetId) {
+        BoundDoor b = new BoundDoor();
+        if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            String raw = Prefs.widgetDoor(appWidgetId, c);
+            if (raw != null && raw.length() > 0) {
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject(raw);
+                    b.cid = o.optInt("cid", 0);
+                    b.did = o.optInt("did", 0);
+                    b.name = o.optString("n", "");
+                    b.kind = o.optString("k", "");
+                    b.bound = b.cid > 0 && b.did > 0;
+                } catch (Throwable t) {
+                    b.bound = false;
+                }
+            }
+        }
+        if (!b.bound) {
+            b.cid = Prefs.communityId(c);
+            b.did = Prefs.doorId(c);
+            b.name = Prefs.doorName(c);
+            b.kind = Prefs.doorKind(c);
+        }
+        return b;
+    }
+
+    private static State readState(Context c, int mode, int appWidgetId) {
         State s = new State();
-        final int cid = Prefs.communityId(c);
-        final int did = Prefs.doorId(c);
-        final String doorName = Prefs.doorName(c);
-        final String kind = Prefs.doorKind(c);
+        s.appWidgetId = appWidgetId;
+        BoundDoor b = boundDoor(c, appWidgetId);
+        final int cid = b.cid;
+        final int did = b.did;
+        final String doorName = b.name;
+        final String kind = b.kind;
 
         s.logged = Prefs.loggedIn(c);
         s.ready = s.logged && cid > 0 && did > 0;
@@ -256,10 +326,11 @@ public class OpenWidget extends AppWidgetProvider {
         rv.setTextColor(R.id.w_state, s.stateColor);
 
         PendingIntent piApp = appIntent(c);
-        PendingIntent piOpen = openIntent(c);
-        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? piOpen : piApp);
-        rv.setOnClickPendingIntent(R.id.w_header, piApp);
-        rv.setOnClickPendingIntent(R.id.w_state, piApp);
+        PendingIntent piOpen = openIntent(c, s.appWidgetId);
+        PendingIntent piConfig = configIntent(c, s.appWidgetId);
+        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? piOpen : piConfig);
+        rv.setOnClickPendingIntent(R.id.w_header, piConfig);   // 点门名=给这个 widget 换门
+        rv.setOnClickPendingIntent(R.id.w_state, piConfig);
         return rv;
     }
 
@@ -281,7 +352,7 @@ public class OpenWidget extends AppWidgetProvider {
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 12.5f);
             rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_sq_blue);
         }
-        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c) : appIntent(c));
+        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c, s.appWidgetId) : configIntent(c, s.appWidgetId));
         return rv;
     }
 
@@ -301,7 +372,7 @@ public class OpenWidget extends AppWidgetProvider {
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 12.5f);
             rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_pill_blue);
         }
-        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c) : appIntent(c));
+        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c, s.appWidgetId) : configIntent(c, s.appWidgetId));
         return rv;
     }
 
@@ -316,10 +387,10 @@ public class OpenWidget extends AppWidgetProvider {
         rv.setTextColor(R.id.w_meta, s.stateColor);
 
         applyPill(rv, s, "开 门", "开门中…");
-        PendingIntent piApp = appIntent(c);
-        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c) : piApp);
-        rv.setOnClickPendingIntent(R.id.w_header, piApp);
-        rv.setOnClickPendingIntent(R.id.w_meta, piApp);
+        PendingIntent piConfig = configIntent(c, s.appWidgetId);
+        rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c, s.appWidgetId) : piConfig);
+        rv.setOnClickPendingIntent(R.id.w_header, piConfig);   // 点门名=给这个 widget 换门
+        rv.setOnClickPendingIntent(R.id.w_meta, piConfig);
         return rv;
     }
 
@@ -369,9 +440,22 @@ public class OpenWidget extends AppWidgetProvider {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    private static PendingIntent openIntent(Context c) {
-        return PendingIntent.getBroadcast(c, REQ_OPEN,
-                new Intent(c, WidgetOpenReceiver.class).setAction(ACTION_OPEN),
+    private static PendingIntent openIntent(Context c, int appWidgetId) {
+        // requestCode 用 widgetId 区分，确保多个小部件的 PendingIntent 互不覆盖
+        int req = REQ_OPEN + Math.max(0, appWidgetId);
+        return PendingIntent.getBroadcast(c, req,
+                new Intent(c, WidgetOpenReceiver.class).setAction(ACTION_OPEN)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** 点门名/头部：打开门列表的「小部件配置模式」，为这个 widget 单独选门。 */
+    private static PendingIntent configIntent(Context c, int appWidgetId) {
+        int req = REQ_CONFIG + Math.max(0, appWidgetId);
+        return PendingIntent.getActivity(c, req,
+                new Intent(c, DoorListActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(DoorListActivity.EXTRA_WIDGET_ID, appWidgetId),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
@@ -382,7 +466,7 @@ public class OpenWidget extends AppWidgetProvider {
      * 前置校验与 App 内 doOpen() 保持一致：无凭证 / 未选门 / 无网络都当场回话，
      * 不让用户对着桌面卡片干等 15 秒超时。
      */
-    static void openNow(Context context) {
+    static void openNow(Context context, int appWidgetId) {
         final Context c = context.getApplicationContext();
         AppLog.init(c);
         final String trace = AppLog.newTrace();
@@ -391,8 +475,10 @@ public class OpenWidget extends AppWidgetProvider {
             QinlinApi.setOpenid(Prefs.openid(c));
 
             String token = Prefs.session(c);
-            final int cid = Prefs.communityId(c);
-            final int did = Prefs.doorId(c);
+            BoundDoor door = boundDoor(c, appWidgetId);
+            final int cid = door.cid;
+            final int did = door.did;
+            final String boundDoorName = door.name;
 
             if (!Prefs.loggedIn(c)) {
                 // 凭证被判超时但本机仍保留：先用它探活一次，恢复就直接继续开门，
@@ -404,7 +490,7 @@ public class OpenWidget extends AppWidgetProvider {
                 } else {
                     AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：未登录或凭证超时且探活未恢复");
                     // 被拦下也算一次尝试：写一条失败记录，App 里能看到「为什么没开」
-                    noteResult(c, false, token.length() > 0 ? "凭证超时" : "未登录", 0, FROM_WIDGET);
+                    noteResult(c, false, token.length() > 0 ? "凭证超时" : "未登录", 0, FROM_WIDGET, boundDoorName);
                     toast(c, token.length() > 0
                             ? "登录已失效，请打开应用点「重试连接」"
                             : "请先在应用里登录");
@@ -413,20 +499,21 @@ public class OpenWidget extends AppWidgetProvider {
             }
             if (cid <= 0 || did <= 0) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：未选择门 cid=" + cid + " did=" + did);
-                noteResult(c, false, "未选门", 0, FROM_WIDGET);
+                noteResult(c, false, "未选门", 0, FROM_WIDGET, boundDoorName);
                 toast(c, "请先在应用里选择要控制的门");
                 return;
             }
             if (!Net.online(c)) {
                 AppLog.w(AppLog.OPEN, trace, "小部件开门被拦下：当前无网络（" + Net.describe(c) + "）");
-                noteResult(c, false, "无网络", 0, FROM_WIDGET);
+                noteResult(c, false, "无网络", 0, FROM_WIDGET, boundDoorName);
                 toast(c, "当前没有网络，无法开门");
                 return;
             }
 
             AppLog.i(AppLog.OPEN, trace, "桌面小部件触发开门 | session=" + AppLog.fp(token)
                     + " | cid=" + cid + " did=" + did
-                    + " | 门=" + Prefs.doorName(c)
+                    + " | 门=" + (boundDoorName.length() > 0 ? boundDoorName : ("门 #" + did))
+                    + " | 绑定=" + door.bound
                     + " | 网络=" + Net.describe(c)
                     + " | 入口=桌面小部件（未打开界面）");
 
@@ -436,7 +523,7 @@ public class OpenWidget extends AppWidgetProvider {
                 long cost = System.currentTimeMillis() - t0;
                 AppLog.ok(AppLog.OPEN, "小部件开门：服务端已接受指令（耗时 " + cost
                         + "ms，不等于物理门已开）| 原文：" + raw);
-                noteResult(c, true, "已开门", (int) cost, FROM_WIDGET);
+                noteResult(c, true, "已开门", (int) cost, FROM_WIDGET, boundDoorName);
                 toast(c, "已发出开门指令，请确认门是否打开");
             } catch (QinlinApi.ApiException e) {
                 int cost = (int) (System.currentTimeMillis() - t0);
@@ -445,19 +532,19 @@ public class OpenWidget extends AppWidgetProvider {
                     AppLog.w(AppLog.LOGIN, trace, dead
                             ? "小部件开门：确认登录超时 → 只标记过期，本机凭证保留"
                             : "小部件开门：401 判定为网关误判，登录态保留");
-                    noteResult(c, false, "凭证失效", cost, FROM_WIDGET);
+                    noteResult(c, false, "凭证失效", cost, FROM_WIDGET, boundDoorName);
                     toast(c, dead ? "登录已失效，请打开应用点「重试连接」"
                                  : "刚才是网关临时异常，请再点一次");
                     if (dead) refreshAll(c);
                 } else {
                     AppLog.e(AppLog.ERR, trace, "小部件开门失败 [" + e.code + "] " + e.getMessage());
-                    noteResult(c, false, "失败 " + e.code, cost, FROM_WIDGET);
+                    noteResult(c, false, "失败 " + e.code, cost, FROM_WIDGET, boundDoorName);
                     toast(c, "开门失败：" + e.code);
                 }
             } catch (Exception e) {
                 AppLog.e(AppLog.ERR, trace, "小部件开门异常 " + AppLog.stack(e));
                 noteResult(c, false, "网络异常",
-                        (int) (System.currentTimeMillis() - t0), FROM_WIDGET);
+                        (int) (System.currentTimeMillis() - t0), FROM_WIDGET, boundDoorName);
                 toast(c, "开门失败：网络异常，请检查网络");
             }
         } finally {

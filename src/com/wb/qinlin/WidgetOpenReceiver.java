@@ -1,5 +1,6 @@
 package com.wb.qinlin;
 
+import android.appwidget.AppWidgetManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -26,6 +27,9 @@ public class WidgetOpenReceiver extends BroadcastReceiver {
             return;
         }
 
+        final int appWidgetId = intent.getIntExtra(
+                AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
+
         final PendingResult pr = goAsync();
         // 主线程先把按钮切成「开门中…」，用户点完立刻看到反馈
         OpenWidget.markBusy(context);
@@ -34,7 +38,7 @@ public class WidgetOpenReceiver extends BroadcastReceiver {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    OpenWidget.openNow(app);
+                    OpenWidget.openNow(app, appWidgetId);
                 } catch (Throwable t) {
                     AppLog.e(AppLog.ERR, "小部件开门未捕获异常 " + AppLog.stack(t));
                 } finally {

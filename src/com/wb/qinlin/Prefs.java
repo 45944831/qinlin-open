@@ -12,20 +12,30 @@ public final class Prefs {
         return c.getSharedPreferences(P, Context.MODE_PRIVATE);
     }
 
-    public static String phone(Context c) { return sp(c).getString("phone", ""); }
-    public static void setPhone(Context c, String v) {
-        sp(c).edit().putString("phone", v).apply();
+    /** App 启动时调用：把历史明文凭证一次性升级为 Keystore 密文（幂等、失败不影响原值）。 */
+    public static void migrateSecureFields(Context c) {
+        SecureStore.migrate(c, sp(c), "session", "login_data", "phone");
     }
 
-    public static String session(Context c) { return sp(c).getString("session", ""); }
+    // 敏感字段（手机号 / sessionId / 登录原文）经 Keystore 加密落盘；
+    // SecureStore 读取时自动兼容历史明文，覆盖安装或加密不可用时都不会丢凭证。
+    public static String phone(Context c) { return SecureStore.get(c, sp(c), "phone", ""); }
+    public static void setPhone(Context c, String v) {
+        SharedPreferences.Editor ed = sp(c).edit();
+        SecureStore.put(c, ed, "phone", v);
+        ed.apply();
+    }
+
+    public static String session(Context c) { return SecureStore.get(c, sp(c), "session", ""); }
 
     /**
      * 保存凭证时顺手记下「写入时间」与「登录时的 openid 指纹」。
      * 覆盖安装 / 设备标识变化后，日志据此判断服务端是否可能拒绝旧会话。
      */
     public static void setSession(Context c, String v) {
-        sp(c).edit().putString("session", v)
-                .putLong("session_at", System.currentTimeMillis())
+        SharedPreferences.Editor ed = sp(c).edit();
+        SecureStore.put(c, ed, "session", v);
+        ed.putLong("session_at", System.currentTimeMillis())
                 .putString("session_openid_fp", AppLog.fp(openid(c)))
                 .putBoolean("session_expired", false)
                 .putLong("last_keep_alive", System.currentTimeMillis())
@@ -91,10 +101,12 @@ public final class Prefs {
      * 当前只用 sessionId；留着它是为了日后确认上游是否下发长效凭证 / 续期票据，
      * 有了它才有可能像官方 App 那样静默续期，而不是每次超时都收短信。
      */
-    public static String loginData(Context c) { return sp(c).getString("login_data", ""); }
+    public static String loginData(Context c) { return SecureStore.get(c, sp(c), "login_data", ""); }
 
     public static void setLoginData(Context c, String v) {
-        sp(c).edit().putString("login_data", v == null ? "" : v).apply();
+        SharedPreferences.Editor ed = sp(c).edit();
+        SecureStore.put(c, ed, "login_data", v == null ? "" : v);
+        ed.apply();
     }
 
     /**
@@ -186,6 +198,27 @@ public final class Prefs {
                 .remove("dkind").remove("donline")
                 .remove("w_last")
                 .remove("door_confirmed_phone").apply();
+    }
+
+    // ---------- 每个小部件独立绑定的门（P4：支持同屏放多个不同门） ----------
+
+    /** 某 widgetId 绑定的门 JSON：{"cid":..,"did":..,"n":..,"k":..}；未绑定返回空串。 */
+    private static String widgetDoorKey(int appWidgetId) { return "wd_" + appWidgetId; }
+
+    public static String widgetDoor(int appWidgetId, Context c) {
+        return SecureStore.get(c, sp(c), widgetDoorKey(appWidgetId), "");
+    }
+
+    /** value 为门 JSON；传空串/null 表示解绑（该 widget 回退到全局默认门）。 */
+    public static void setWidgetDoor(int appWidgetId, Context c, String value) {
+        SharedPreferences.Editor ed = sp(c).edit();
+        SecureStore.put(c, ed, widgetDoorKey(appWidgetId), value == null ? "" : value);
+        ed.apply();
+    }
+
+    /** 删除某 widget 的绑定（小组件从桌面移除时调用）。 */
+    public static void clearWidgetDoor(int appWidgetId, Context c) {
+        sp(c).edit().remove(widgetDoorKey(appWidgetId)).apply();
     }
 
     /** 选中的门所属区域与在线状态：主界面卡片用来「显示这扇门」。旧数据为空时会退化成只显示 id。 */
