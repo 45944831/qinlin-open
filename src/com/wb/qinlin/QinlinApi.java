@@ -98,6 +98,23 @@ public final class QinlinApi {
         }
     }
 
+    /**
+     * 一次门列表读取的结果：门 + 上游的「授权到期」标记。
+     * 以前只返回 List&lt;Door&gt;，把 data 顶层的 authorizeExpired 直接丢掉了——
+     * 而官方 FAQ 明确写着开门权限有期限（业主自动续期、租客需申请），
+     * 到期前官方 App 会在首页提醒，我们却只能等开门失败才知道。
+     */
+    public static class DoorsResult {
+        public final List<Door> doors;
+        /** 上游 authorizeExpired 原值：-1 = 未返回该字段；0 = 无到期限制；≥1 = 有到期限制。 */
+        public final int authorizeExpired;
+
+        DoorsResult(List<Door> doors, int authorizeExpired) {
+            this.doors = doors;
+            this.authorizeExpired = authorizeExpired;
+        }
+    }
+
     // ---------- 编码工具 ----------
 
     private static byte[] hexToBytes(String s) {
@@ -313,9 +330,11 @@ public final class QinlinApi {
                     + " | 长度 " + text.length() + "字节"
                     + " | 摘要 " + shorten(red, 220));
             if (status != 200) {
-                AppLog.e(AppLog.NET, "HTTP 非 200，本次请求判定失败");
+                // 5xx 的真实原因常在 exception / error 里，别只报一句 HTTP 500
+                String detail = upstreamDetail(text);
+                AppLog.e(AppLog.NET, "HTTP 非 200，本次请求判定失败 | 原因=" + shorten(detail, 240));
                 throw new ApiException("HTTP_" + status,
-                        "上游 HTTP " + status + "：" + redact(text));
+                        "上游 HTTP " + status + "：" + detail);
             }
             return text;
         } catch (ApiException ae) {
@@ -351,8 +370,7 @@ public final class QinlinApi {
             AppLog.w(AppLog.LOGIN, "⚠ 业务响应顶层出现 sessionId 字段（疑似服务端轮换票据），本版暂不自动替换");
         }
         if (!ok) {
-            String msg = redact(o.optString("message",
-                    o.optString("msg", "亲邻未接受请求")));
+            String msg = errorText(o);
             boolean expired = code.equals("401")
                     || msg.contains("请重新登录") || msg.contains("请先登录")
                     || msg.contains("未登录") || msg.contains("登录已过期")
@@ -364,6 +382,15 @@ public final class QinlinApi {
             if (authenticated && expired) {
                 AppLog.w(AppLog.LOGIN, "服务端判定凭证失效 → SESSION_EXPIRED（需重新短信登录）");
                 throw new ApiException("SESSION_EXPIRED", "亲邻凭证已失效，请重新短信登录");
+            }
+            // 121 = 签名或签名头不被接受（缺头 / 时间戳越界 / 签名不匹配）。
+            // 单独成码：以前混在 QINLIN_REJECTED 里，和「门离线 / 无权限」的提示一模一样，
+            // 上游一旦改签名规则，日志和界面都看不出真正原因。
+            if (code.equals("121")) {
+                AppLog.e(AppLog.NET, "业务拒绝 → SIGN_REJECTED（code 121 = 签名/签名头不被接受）| msg=" + msg);
+                throw new ApiException("SIGN_REJECTED",
+                        "亲邻网关拒绝了请求签名（code 121），多为协议版本头过期；请更新 App 后重试，"
+                                + "持续出现请把日志发给开发者。上游原因：" + msg);
             }
             AppLog.e(AppLog.NET, "业务拒绝 → QINLIN_REJECTED | msg=" + msg);
             throw new ApiException("QINLIN_REJECTED", "亲邻未接受请求：" + msg);
@@ -488,9 +515,29 @@ public final class QinlinApi {
      * 用探活短超时（PROBE_*）：探活本身很轻，等太久没有意义，
      * 且小部件路径的广播前台时限只有约 10 秒，预算必须留给开门请求。
      */
-    public static void checkLogin(String token) throws Exception {
+    public static int checkLogin(String token) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
-        post("/api/app/v1/checkLogin", f, token, "json", true, PROBE_CONNECT_MS, PROBE_READ_MS);
+        Object data = post("/api/app/v1/checkLogin", f, token, "json", true,
+                PROBE_CONNECT_MS, PROBE_READ_MS);
+        // 2026-11-16 真机实测：data = 7776000，正好 90 天整 → 会话滑动过期窗口（秒）。
+        // 以前返回 void 把它丢了；现在解析出来，界面与日志都能看到「凭证还剩多久」。
+        int ttl = -1;
+        if (data instanceof Number) {
+            ttl = ((Number) data).intValue();
+        } else if (data instanceof String) {
+            try {
+                ttl = Integer.parseInt(((String) data).trim());
+            } catch (Exception ignored) {
+            }
+        }
+        if (ttl > 0) {
+            AppLog.i(AppLog.LOGIN, "checkLogin 通过 | 会话有效期剩余 " + ttl + " 秒 ≈ "
+                    + (ttl / 86400) + " 天（滑动过期：任意一次带凭证的请求都会续上）");
+        } else {
+            AppLog.i(AppLog.LOGIN, "checkLogin 通过 | 有效期字段未识别（data 类型="
+                    + (data == null ? "null" : data.getClass().getSimpleName()) + "），不影响登录态判定");
+        }
+        return ttl;
     }
 
     /**
@@ -507,6 +554,43 @@ public final class QinlinApi {
         s = s.replaceAll("(?<!\\d)1[3-9]\\d{9}(?!\\d)", "***PHONE***");
         s = s.replace('\n', ' ').replace('\r', ' ');
         return s.length() > 3000 ? s.substring(0, 3000) + "…(截断)" : s;
+    }
+
+    /**
+     * 从上游 JSON 里拼出「可读原因」：message 之外还要看 exception / error。
+     * 2026-11-16 调研（吾爱破解实测报文）：服务端 5xx 时 message 往往只有一句
+     * {@code No message available}，真实异常栈在 {@code exception} 字段里，
+     * 只读 message 等于把唯一线索丢掉。
+     */
+    private static String reason(JSONObject o) {
+        StringBuilder sb = new StringBuilder();
+        String msg = o.optString("message", o.optString("msg", ""));
+        if (msg.length() > 0 && !"No message available".equalsIgnoreCase(msg)) sb.append(msg);
+        appendField(sb, "exception", o.optString("exception", ""));
+        appendField(sb, "error", o.optString("error", ""));
+        return sb.toString().trim();
+    }
+
+    private static void appendField(StringBuilder sb, String key, String v) {
+        if (v == null || v.length() == 0) return;
+        if (sb.length() > 0) sb.append(" | ");
+        sb.append(key).append('=').append(v.length() > 200 ? v.substring(0, 200) + "…" : v);
+    }
+
+    /** HTTP 非 200 时的原因文本：优先解析 JSON 的 message/exception/error，解析不了就退回原文。 */
+    private static String upstreamDetail(String text) {
+        try {
+            String r = reason(new JSONObject(text));
+            if (r.length() > 0) return redact(r);
+        } catch (Exception ignored) {
+        }
+        return redact(text);
+    }
+
+    /** 业务 code != 0 时的原因文本（解析不出就保持旧的兜底文案）。 */
+    private static String errorText(JSONObject o) {
+        String r = reason(o);
+        return redact(r.length() > 0 ? r : "亲邻未接受请求");
     }
 
     /**
@@ -534,6 +618,12 @@ public final class QinlinApi {
             order[p++] = i;
         }
         return order;
+    }
+
+    /** 网络层失败（超时 / 断网 / TLS）：换请求格式没有任何帮助，必须立刻停手。 */
+    private static boolean isNetworkFailure(Throwable e) {
+        // SocketTimeoutException / ConnectException / SSLException 都是 IOException 的子类
+        return e instanceof java.io.IOException;
     }
 
     public static List<Community> communities(String token) throws Exception {
@@ -579,6 +669,12 @@ public final class QinlinApi {
                 log.append(names[i]).append(" → ").append(e.getClass().getSimpleName())
                         .append(": ").append(shorten(e.getMessage(), 120)).append("\n");
                 AppLog.e(AppLog.DOORS, names[i] + " 异常 " + AppLog.stack(e));
+                // 网络层失败（超时 / 断网）与「请求姿势不对」没有因果关系：
+                // 换一种 body 格式照样连不上，继续串行 4 次只会把等待放大到 4×20 秒。
+                if (isNetworkFailure(e)) {
+                    AppLog.w(AppLog.DOORS, "网络层失败 → 停止换姿势重试（换请求格式不解决网络问题）");
+                    break;
+                }
             }
         }
         if (!succeeded) {
@@ -634,16 +730,30 @@ public final class QinlinApi {
         DIAG.set("小区列表：已用「" + names[mode] + "」方式成功");
     }
 
-    public static List<Door> doors(String token, int communityId) throws Exception {
+    /** 读取某小区的门列表，并带出上游的授权到期标记（见 {@link DoorsResult}）。 */
+    public static DoorsResult doorsDetailed(String token, int communityId) throws Exception {
         AppLog.i(AppLog.DOORS, "读取门列表 communityId=" + communityId
                 + " | session=" + AppLog.fp(token));
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("communityId", String.valueOf(communityId));
         List<Door> out = new ArrayList<Door>();
+        int authorizeExpired = -1;
         try {
             Object data = post("/api/app/user/v2/queryAllUserDoorByCache", f, token, "form");
-            parseDoors(data, communityId, out);
+            authorizeExpired = parseDoors(data, communityId, out);
         } catch (Exception e) {
+            // 网络层失败时兜底接口只会再等一轮超时（5s 连接 + 15s 读），
+            // 而结果必然一样失败：直接上抛，让界面快点给出「网络异常」结论。
+            if (isNetworkFailure(e)) {
+                AppLog.w(AppLog.DOORS, "主门列表接口网络异常 → 不再尝试兜底接口 | " + e.getMessage());
+                throw e;
+            }
+            // 凭证失效也不能被兜底吞掉：否则界面只显示「未读取到门列表」，
+            // 用户看不到「登录已失效」，也就不会去重新登录（旧实现就是这个症状）。
+            if (e instanceof ApiException && "SESSION_EXPIRED".equals(((ApiException) e).code)) {
+                AppLog.w(AppLog.DOORS, "主门列表接口判定凭证失效 → 直接上抛，不再尝试兜底接口");
+                throw e;
+            }
             AppLog.w(AppLog.DOORS, "主门列表接口失败，尝试 New 接口：" + e.getMessage());
         }
         // 主接口返回空或失败：用 QinlinOpen 所用的 *ByCacheNew 接口兜底。
@@ -651,40 +761,76 @@ public final class QinlinApi {
         if (out.isEmpty()) {
             try {
                 Object data = post("/api/app/user/v2/queryUserDoorByCacheNew", f, token, "form");
-                parseDoors(data, communityId, out);
+                int ax = parseDoors(data, communityId, out);
+                if (ax >= 0) authorizeExpired = ax;
                 if (!out.isEmpty()) AppLog.ok(AppLog.DOORS, "New 接口兜底成功，返回 " + out.size() + " 扇门");
             } catch (Exception e) {
                 AppLog.w(AppLog.DOORS, "New 门列表接口也失败：" + e.getMessage());
             }
         }
-        AppLog.i(AppLog.DOORS, "门列表返回 " + out.size() + " 扇门 communityId=" + communityId);
-        return out;
+        AppLog.i(AppLog.DOORS, "门列表返回 " + out.size() + " 扇门 communityId=" + communityId
+                + " | authorizeExpired=" + authorizeExpired);
+        return new DoorsResult(out, authorizeExpired);
     }
 
-    /** 解析门列表：兼容新的扁平数组与旧的分组对象两种 data 结构。 */
-    private static void parseDoors(Object data, int communityId, List<Door> out) {
+    /** 解析门列表：兼容新的扁平数组与旧的分组对象两种 data 结构；返回 authorizeExpired。 */
+    private static int parseDoors(Object data, int communityId, List<Door> out) {
         if (data instanceof JSONArray) {
             JSONArray arr = (JSONArray) data;
             for (int i = 0; i < arr.length(); i++) {
                 addDoor(arr.optJSONObject(i), communityId, "门", out);
             }
-            return;
+            return -1;
         }
         if (!(data instanceof JSONObject)) {
             AppLog.w(AppLog.DOORS, "门列表响应 data 非对象/数组，跳过");
-            return;
+            return -1;
         }
         JSONObject o = (JSONObject) data;
-        String[] keys = {"buildingDoorList", "gateDoorList", "customDoorList", "userDoorDTOS",
-                "doorList", "doors", "data", "list"};
-        for (String key : keys) {
-            JSONArray arr = o.optJSONArray(key);
-            if (arr == null) continue;
-            String kind = "gateDoorList".equals(key) ? "小区门"
-                    : "buildingDoorList".equals(key) ? "楼栋门"
-                    : "customDoorList".equals(key) ? "自定义门" : "门";
-            for (int i = 0; i < arr.length(); i++) addDoor(arr.optJSONObject(i), communityId, kind, out);
+        // 把 data 的字段名打进日志：上游新增/改名时，靠这一行就能判断该补哪个解析分支
+        JSONArray names = o.names();
+        if (names != null) AppLog.i(AppLog.DOORS, "门列表 data 字段=" + names.toString());
+
+        int authorizeExpired = o.has("authorizeExpired") ? o.optInt("authorizeExpired", -1) : -1;
+        if (authorizeExpired >= 0) {
+            AppLog.i(AppLog.DOORS, "门禁授权标记 authorizeExpired=" + authorizeExpired
+                    + (authorizeExpired == 0 ? "（无到期限制）"
+                    : "（上游标记存在到期限制：到期后需在官方 App 续期，否则开门会被拒）"));
         }
+
+        // commonlyUsedDoor（服务端指定的常用门）在上游是**单个对象**而非数组。
+        // 旧实现只按 optJSONArray 取值，这个键直接被跳过——若某扇门只出现在这里就会整扇漏掉。
+        String[] keys = {"buildingDoorList", "gateDoorList", "customDoorList", "commonlyUsedDoor",
+                "userDoorDTOS", "doorList", "doors", "data", "list"};
+        for (String key : keys) {
+            String kind = kindOf(key);
+            JSONArray arr = o.optJSONArray(key);
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) addDoor(arr.optJSONObject(i), communityId, kind, out);
+                if (arr.length() > 0) AppLog.i(AppLog.DOORS, "门列表分组 " + key + "=" + arr.length());
+                continue;
+            }
+            JSONObject single = o.optJSONObject(key);
+            if (single != null) {
+                JSONArray nk = single.names();
+                AppLog.i(AppLog.DOORS, "「" + key + "」是单对象而非数组 | 字段="
+                        + (nk == null ? "空" : nk.toString()));
+                int before = out.size();
+                addDoor(single, communityId, kind, out);
+                if (out.size() > before) {
+                    AppLog.ok(AppLog.DOORS, "「" + key + "」已按单门解析并入列表");
+                }
+            }
+        }
+        return authorizeExpired;
+    }
+
+    private static String kindOf(String key) {
+        return "gateDoorList".equals(key) ? "小区门"
+                : "buildingDoorList".equals(key) ? "楼栋门"
+                : "customDoorList".equals(key) ? "自定义门"
+                : "commonlyUsedDoor".equals(key) ? "常用门"
+                : "门";
     }
 
     private static void addDoor(JSONObject d, int communityId, String kind, List<Door> out) {

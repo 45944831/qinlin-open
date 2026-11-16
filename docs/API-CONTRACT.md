@@ -111,6 +111,31 @@ getSessionId                              CheckLoginRedirectMixin / checkLoginAn
 | `/api/app/v1/userCommunity/getCommunity` | 对照 | 404 | 404 | GONE |
 | `/api/app/doorcontrol/queryDoorControlInfo` | 对照 | 404 | 404 | GONE |
 
+### 门列表返回结构（2026-11-16 真机实测）
+
+`/api/app/user/v2/queryAllUserDoorByCache` → `code:0` 时，`data` 的字段集合实测为：
+
+```
+["authorizeExpired","buildingDoorList","commonlyUsedDoor","customDoorList",
+ "gateDoorList","hasFouce","isForceSubscribeWechat","userDoorDTOS"]
+```
+
+- `buildingDoorList` / `gateDoorList` / `customDoorList` / `userDoorDTOS`：**数组**，元素含
+  `doorControlId` / `doorControlName` / `online` / `deviceModel` 等（实测各 1 条，去重后共 2 扇门）。
+- `commonlyUsedDoor`：**单个对象，不是数组**，字段与数组元素相同。
+  旧实现只按 `optJSONArray` 取值，这个键会被整体跳过——若某扇门只出现在这里，门列表就会缺一扇门。
+  现已改为「数组优先，取不到再按单对象解析」。
+- `authorizeExpired`：门禁授权到期标记，实测 `1`（该账号当时**仍可正常开门**）。
+  官方 FAQ 说明开门权限有期限（业主自动续期、租客需申请），到期前 30 天官方 App 会在首页提醒；
+  本 App 只把它解析出来做提示，**不据此判定权限失效**，语义以官方为准。
+
+错误码补充：
+
+- `code:121` = 签名或签名头不被接受（缺头 / 时间戳越界 / 签名不匹配），本版单独映射为
+  `SIGN_REJECTED`，不再和「门离线 / 无权限」的 `QINLIN_REJECTED` 混为一谈。
+- HTTP 5xx 时 `message` 往往只有 `No message available`，真实原因在 `exception` / `error` 字段，
+  日志与错误提示会一并带出。
+
 ## 5. 备用路径与降级策略
 
 | 用途 | 主路径 | 备选 1 | 备选 2 |

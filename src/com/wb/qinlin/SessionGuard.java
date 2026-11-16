@@ -75,12 +75,12 @@ public final class SessionGuard {
         // 小部件 / 门列表是独立进程入口，openid 必须与登录时一致
         QinlinApi.setOpenid(Prefs.openid(app));
 
-        int r = touch(token, true);
+        int r = touch(app, token, true);
         if (r == BIZ_REJECT) {
             // 真机已确认 checkLogin 在有效凭证下返回 code:0（data 为固定常量 7776000）；
             // 若将来上游改签名导致它给不出结论，退回已验收过的只读小区列表兜底。
             AppLog.w(AppLog.LOGIN, "checkLogin 未给出结论 → 回退 communityInfo 探活");
-            r = touch(token, false);
+            r = touch(app, token, false);
         }
         if (r == OK) {
             Prefs.setLastKeepAlive(app, now);
@@ -99,10 +99,20 @@ public final class SessionGuard {
     }
 
     /** 单次只读请求。useCheckLogin=false 时用已真机验收的小区列表接口。 */
-    private static int touch(String token, boolean useCheckLogin) {
+    private static int touch(Context c, String token, boolean useCheckLogin) {
         String tag = useCheckLogin ? "checkLogin" : "communityInfo";
         try {
-            if (useCheckLogin) QinlinApi.checkLogin(token);
+            if (useCheckLogin) {
+                // checkLogin 的 data 是会话剩余有效期（秒），顺手记下来给界面用
+                int ttl = QinlinApi.checkLogin(token);
+                if (ttl > 0) {
+                    Prefs.setSessionTtl(c, ttl);
+                    if (ttl < 30L * 86400L) {
+                        AppLog.w(AppLog.LOGIN, "⚠ 会话剩余有效期仅 " + Prefs.sessionTtlText(c)
+                                + "：长期未使用会自然过期，建议打开官方 App 或本 App 走一次请求续期");
+                    }
+                }
+            }
             // checkLogin 给不出结论时只发一次短超时的 communityInfo：
             // communities() 会串行试 4 种姿势（各 5s 连接 + 15s 读），
             // 探活路径不能背这个预算——小部件开门的广播前台时限只有约 10 秒。

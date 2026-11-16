@@ -39,11 +39,38 @@ public final class Prefs {
                 .putString("session_openid_fp", AppLog.fp(openid(c)))
                 .putBoolean("session_expired", false)
                 .putLong("last_keep_alive", System.currentTimeMillis())
+                // 新凭证的有效期要等下一次探活才知道，先清掉旧值避免展示过期信息
+                .remove("session_ttl_s").remove("session_ttl_at")
                 .apply();
     }
     public static long sessionSavedAt(Context c) { return sp(c).getLong("session_at", 0); }
     public static String sessionOpenidFp(Context c) {
         return sp(c).getString("session_openid_fp", "");
+    }
+
+    /**
+     * 服务端下发的会话有效期（秒），来自 checkLogin 的 data（真机实测 7776000 = 90 天）。
+     * -1 表示还没探活过 / 上游没给这个字段。它是**滑动窗口**：任意一次带凭证的请求都会续上，
+     * 所以只有长期不用才会自然到期，界面用它回答「凭证还剩多久」。
+     */
+    public static int sessionTtlSeconds(Context c) { return sp(c).getInt("session_ttl_s", -1); }
+
+    public static long sessionTtlAt(Context c) { return sp(c).getLong("session_ttl_at", 0); }
+
+    public static void setSessionTtl(Context c, int seconds) {
+        if (seconds <= 0) return;
+        sp(c).edit().putInt("session_ttl_s", seconds)
+                .putLong("session_ttl_at", System.currentTimeMillis()).apply();
+    }
+
+    /** 「90 天」这类可读文案；未知返回空串。 */
+    public static String sessionTtlText(Context c) {
+        int s = sessionTtlSeconds(c);
+        if (s <= 0) return "";
+        long days = s / 86400L;
+        if (days >= 1) return days + " 天";
+        long hours = s / 3600L;
+        return hours >= 1 ? hours + " 小时" : Math.max(1, s / 60L) + " 分钟";
     }
 
     /**
@@ -55,7 +82,8 @@ public final class Prefs {
                 .remove("session_at").remove("session_openid_fp")
                 .remove("door_cache").remove("w_last")
                 .remove("session_expired").remove("last_keep_alive")
-                .remove("last_keep_alive_try").remove("login_data").apply();
+                .remove("last_keep_alive_try").remove("login_data")
+                .remove("session_ttl_s").remove("session_ttl_at").apply();
     }
 
     // ---------- 会话过期标记与探活（与「退出登录」严格区分） ----------

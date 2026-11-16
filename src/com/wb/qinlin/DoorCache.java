@@ -30,14 +30,28 @@ public final class DoorCache {
         /** 附加说明：小区列表使用的请求姿势，或「部分小区读取失败」。 */
         public final String note;
         public final boolean fromCache;
+        /** 上游 authorizeExpired：-1 未返回 / 0 无到期限制 / ≥1 有到期限制。 */
+        public final int authorizeExpired;
 
         Data(String communityName, List<QinlinApi.Door> doors, long savedAt,
-             String note, boolean fromCache) {
+             String note, boolean fromCache, int authorizeExpired) {
             this.communityName = communityName == null ? "" : communityName;
             this.doors = doors == null ? new ArrayList<QinlinApi.Door>() : doors;
             this.savedAt = savedAt;
             this.note = note == null ? "" : note;
             this.fromCache = fromCache;
+            this.authorizeExpired = authorizeExpired;
+        }
+
+        /**
+         * 授权到期提示（没有可说的就返回空串）。
+         * 官方 FAQ：开门权限有期限，业主自动续期、租客需在官方 App 申请；
+         * 到期后表现就是「开门失败」，本机提前把上游标记翻出来，避免到时误判成 App 坏了。
+         */
+        public String authorizeLine() {
+            if (authorizeExpired <= 0) return "";
+            return "门禁授权：上游标记「有到期限制」（authorizeExpired=" + authorizeExpired
+                    + "），当前仍可正常开门；到期后需在官方 App 续期，届时本 App 会表现为开门被拒。";
         }
 
         public boolean fresh() {
@@ -81,7 +95,7 @@ public final class DoorCache {
             }
             if (doors.isEmpty()) return null;
             return new Data(o.optString("cname", ""), doors, o.optLong("at", 0),
-                    o.optString("note", ""), true);
+                    o.optString("note", ""), true, o.optInt("ax", -1));
         } catch (Exception e) {
             // 缓存坏了不影响主流程，当作没有缓存
             AppLog.w(AppLog.DOORS, "门列表缓存解析失败，已忽略（" +
@@ -96,12 +110,13 @@ public final class DoorCache {
     }
 
     private static void save(Context c, String communityName, List<QinlinApi.Door> doors,
-                             long at, String note) {
+                             long at, String note, int authorizeExpired) {
         try {
             JSONObject o = new JSONObject();
             o.put("at", at);
             o.put("cname", communityName);
             o.put("note", note);
+            o.put("ax", authorizeExpired);
             JSONArray arr = new JSONArray();
             for (QinlinApi.Door d : doors) {
                 JSONObject j = new JSONObject();
@@ -138,9 +153,13 @@ public final class DoorCache {
 
         List<QinlinApi.Door> all = new ArrayList<QinlinApi.Door>();
         StringBuilder errs = new StringBuilder();
+        int authorizeExpired = -1;
         for (QinlinApi.Community cm : cs) {
             try {
-                all.addAll(QinlinApi.doors(token, cm.id));
+                QinlinApi.DoorsResult dr = QinlinApi.doorsDetailed(token, cm.id);
+                all.addAll(dr.doors);
+                // 任一小区标记了到期限制就保留最"严重"的值，宁可多提醒一次
+                if (dr.authorizeExpired > authorizeExpired) authorizeExpired = dr.authorizeExpired;
             } catch (QinlinApi.ApiException e) {
                 if ("SESSION_EXPIRED".equals(e.code)) throw e;   // 凭证失效要交给界面处理
                 errs.append(cm.name).append(": ").append(e.getMessage()).append("\n");
@@ -158,9 +177,10 @@ public final class DoorCache {
         }
 
         long at = System.currentTimeMillis();
-        save(c, cname, all, at, errs.length() > 0 ? note : "");
+        save(c, cname, all, at, errs.length() > 0 ? note : "", authorizeExpired);
         AppLog.i(AppLog.DOORS, "门列表读取完成 " + all.size() + " 扇门，耗时 " + (at - t0) + "ms"
-                + (errs.length() > 0 ? "（部分小区失败）" : ""));
-        return new Data(cname, all, at, note, false);
+                + (errs.length() > 0 ? "（部分小区失败）" : "")
+                + " | authorizeExpired=" + authorizeExpired);
+        return new Data(cname, all, at, note, false, authorizeExpired);
     }
 }

@@ -1285,7 +1285,13 @@ public class MainActivity extends Activity {
             versionFooter.setVisibility(logged ? View.VISIBLE : View.GONE);
         }
         if (logged) {
-            accountTv.setText("● 已登录 · " + maskPhone(Prefs.phone(MainActivity.this)));
+            // N1：checkLogin 的 data 就是会话剩余有效期（真机实测 7776000 秒 = 90 天，滑动过期）。
+            // 放在账号行而不是门卡底行：语义上属于「登录态」，宽度也够，不会被省略号截掉。
+            String ttlText = Prefs.sessionTtlText(MainActivity.this);
+            boolean soon = Prefs.sessionTtlSeconds(MainActivity.this) < 30L * 86400L;
+            accountTv.setText("● 已登录 · " + maskPhone(Prefs.phone(MainActivity.this))
+                    + (ttlText.length() == 0 ? ""
+                        : soon ? " · 凭证仅剩 " + ttlText : " · 凭证 " + ttlText));
             String cname = Prefs.communityName(MainActivity.this);
             communityTv.setText(cname.length() > 0 ? cname : "读取中…");
         }
@@ -1306,16 +1312,20 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 SessionGuard.probeIfStale(c, false);
                 final boolean after = Prefs.loggedIn(c);
-                if (before != after) {
-                    runOnUiThread(new Runnable() {
-                        @Override public void run() {
-                            if (!uiAlive()) return;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (!uiAlive()) return;
+                        if (before != after) {
                             applyLoginState();
                             OpenWidget.refreshAll(MainActivity.this);
                             if (after) toast("登录状态已自动恢复，可以继续开门");
+                        } else {
+                            // 探活顺带带回了「会话剩余有效期」，登录态没变也要补刷一次顶部信息，
+                            // 否则首帧渲染时 TTL 还没落盘，用户永远看不到「凭证 X 天」这行。
+                            applyLoginState();
                         }
-                    });
-                }
+                    }
+                });
             }
         }, "session-probe").start();
     }
@@ -1468,7 +1478,11 @@ public class MainActivity extends Activity {
             }, "session-confirm").start();
         } else {
             AppLog.e(AppLog.ERR, trace, "请求失败 [" + e.code + "] " + e.getMessage());
-            toast("请求失败：" + e.code);
+            // 只弹错误码用户看不懂（QINLIN_REJECTED / SIGN_REJECTED 尤其如此）；
+            // 把上游原因压成一行短提示，完整原文仍留在日志里。
+            String msg = e.getMessage() == null ? "" : e.getMessage().trim();
+            if (msg.length() > 60) msg = msg.substring(0, 60) + "…";
+            toast(msg.length() > 0 ? msg : ("请求失败：" + e.code));
         }
     }
 

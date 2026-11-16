@@ -1472,3 +1472,51 @@ HTTP 200 `{"code":0,"data":7776000,"message":"操作成功"}` →
 - 真机验证重点：① 覆盖安装后旧明文凭证是否自动迁移、是否仍保持登录；② P3 新协议头下能否正常
   拉门列表 / 开门；③ 多小组件各自绑定不同门、点击主按钮是否开对应门；④ 失败开门不写历史；
   ⑤ 官方 App 重登后本 App 是否仍按 401 二次确认提示（不再静默登出）。
+
+## 2026-11-16 19:30 · 落地第三轮调研的 6 项优化（O1–O4 + N1/N2）
+
+用户指令「将所有优化落地」，本轮把第三轮全网调研 + 真机排查得出的 6 项全部实现，均为低风险增量，
+不触碰已验证的开门主链路（`doOpen → startOpen → openDoor` 一行未改）。
+
+**O1 门列表漏解析 `commonlyUsedDoor`**
+`parseDoors` 原来只按 `optJSONArray` 取分组，而该键在上游是**单个对象**，整键被跳过。
+改为「数组优先，取不到再按单对象解析」，并对单对象打印字段名。
+真机实测 `data` 字段：`["authorizeExpired","buildingDoorList","commonlyUsedDoor","customDoorList",
+"gateDoorList","hasFouce","isForceSubscribeWechat","userDoorDTOS"]`，`commonlyUsedDoor` 字段含
+`doorControlId` 等（本账号与 buildingDoorList 同一扇门，去重后仍 2 扇，故无可见变化；
+但只出现在该键的门以前会整扇缺失）。同时打印各分组条数，便于上游改结构时定位。
+
+**O2 `code 121` 单独映射**
+`121` = 签名或签名头不被接受（缺头 / 时间戳越界 / 签名不匹配）。以前归入 `QINLIN_REJECTED`，
+与「门离线 / 无权限」提示相同；现抛 `SIGN_REJECTED` 并给出「协议版本头可能过期」的指引。
+
+**O3 5xx 读 `exception` / `error`**
+新增 `reason()/upstreamDetail()/errorText()`：`message` 为空或 `No message available` 时，
+改读 `exception`、`error` 字段拼原因（各截断 200 字符），HTTP 非 200 与业务 code!=0 两条路径都生效。
+
+**O4 弱网不再串行试 4 种姿势**
+`communities()` 四次尝试里，网络层失败（`IOException`：超时 / 断网 / TLS）现在直接 `break`——
+换 body 格式不解决网络问题，最坏 4×20 秒的等待被压到 1 次。`doorsDetailed()` 遇到网络异常也不再
+试 New 兜底接口，直接上抛让界面立刻给结论。
+
+**顺带修掉的旧问题**：门列表主接口返回 401 时，旧代码把 `SESSION_EXPIRED` 吞进兜底逻辑，
+界面只显示「未读取到门列表」，用户看不到「登录已失效」。现在遇到 401 直接上抛走二次确认流程。
+
+**N1 会话剩余有效期（`checkLogin` 的 data）**
+`checkLogin` 由 `void` 改为返回秒数；真机实测 `data:7776000` = **90 天**（滑动过期）。
+新增 `Prefs.sessionTtlSeconds/Text()`，探活成功即落盘，主界面账号行显示「● 已登录 · 138****0000 · 凭证 90 天」，
+剩余不足 30 天改为「凭证仅剩 X 天」并在日志告警。首帧渲染早于探活返回，故探活回调补刷一次 `applyLoginState()`。
+
+**N2 门禁授权到期标记 `authorizeExpired`**
+`doors()` 改为 `doorsDetailed()`，返回 `DoorsResult{doors, authorizeExpired}`，并随门列表缓存一起持久化（`ax`）。
+实测该账号 `authorizeExpired=1` 且开门正常，故**只做提示、不判定失效**：门列表状态区显示
+「上游标记有到期限制（authorizeExpired=1），当前仍可正常开门；到期后需在官方 App 续期」。
+语义仍待官方文档确认，未在主界面做强提醒。
+
+**验证**：`javac --release 8` 全量编译通过（106 class）；`build-apk.py` 重建 96,072 字节，
+v2+v3 签名通过；真机（示例设备 / 示例序列号）覆盖安装后实测：
+① 冷启动 `checkLogin 通过 | 会话有效期剩余 7776000 秒 ≈ 90 天`，账号行显示「凭证 90 天」；
+② 强制刷新门列表打印完整 `data` 字段与分组条数，`commonlyUsedDoor` 确认是单对象并被正确解析；
+③ 门列表状态区出现授权到期提示（缓存路径与联网路径都显示）；④ 开门主链路与耗时无变化（0.2–0.3s）。
+
+**未提交、未推送**；HEAD 仍 `1cebe82`，本轮改动留在工作区。

@@ -310,8 +310,11 @@ public class DoorListActivity extends Activity {
                     + "\n缓存 · " + cached.age() + " · " + currentLine());
             renderDoors(cached.doors);
             boolean fresh = allowCache && cached.fresh();
-            status("已显示上次读取的 " + cached.doors.size() + " 扇门（" + cached.age()
+            StringBuilder cs = new StringBuilder("已显示上次读取的 " + cached.doors.size() + " 扇门（"
+                    + cached.age()
                     + (fresh ? "）。如需最新权限，点「↻ 刷新门列表」" : "），正在后台刷新…"));
+            if (cached.authorizeExpired > 0) cs.append("\n").append(cached.authorizeLine());
+            status(cs.toString());
         } else {
             subtitle(currentLine());
             status("正在读取小区与门列表…");
@@ -349,9 +352,12 @@ public class DoorListActivity extends Activity {
                     DoorCache.Data d = DoorCache.fetch(DoorListActivity.this, token);
                     subtitle("小区：" + d.communityName + "\n" + currentLine());
                     renderDoors(d.doors);
-                    status(d.doors.isEmpty()
+                    StringBuilder s = new StringBuilder(d.doors.isEmpty()
                             ? "未读取到门列表。请确认账号有门禁权限，或重新登录。\n" + d.note
                             : "读取到 " + d.doors.size() + " 个门，点一扇即设为当前开门。\n" + d.note);
+                    // 上游标记了授权到期限制：提前说清楚，别等哪天开门失败再猜
+                    if (d.authorizeExpired > 0) s.append("\n").append(d.authorizeLine());
+                    status(s.toString());
                     if (d.doors.isEmpty()) showSkip();
                 } catch (QinlinApi.ApiException e) {
                     if ("SESSION_EXPIRED".equals(e.code)) {
