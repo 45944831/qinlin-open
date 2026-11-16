@@ -7,7 +7,6 @@ import android.content.ClipboardManager;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -26,7 +25,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
@@ -103,16 +101,11 @@ public class LogActivity extends Activity {
     }
 
     private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density);
+        return Ui.dp(this, v);
     }
 
     private TextView label(String text, int sizeSp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
+        return Ui.label(this, text, sizeSp, color, bold);
     }
 
     private Button smallButton(String text, int bg, int fg) {
@@ -224,8 +217,7 @@ public class LogActivity extends Activity {
                                 filterBtn.setText("筛选：全部 ▸");
                                 follow = true;
                                 render();
-                                Toast.makeText(LogActivity.this, "日志已清空",
-                                        Toast.LENGTH_SHORT).show();
+                                Ui.toast(LogActivity.this, "日志已清空");
                             }
                         })
                         .show();
@@ -305,10 +297,10 @@ public class LogActivity extends Activity {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("qinlin-log", s));
-            Toast.makeText(this, tip, Toast.LENGTH_SHORT).show();
+            Ui.toast(this, tip);
         } catch (Exception e) {
             AppLog.e(AppLog.ERR, "复制失败 " + AppLog.stack(e));
-            Toast.makeText(this, "复制失败", Toast.LENGTH_SHORT).show();
+            Ui.toast(this, "复制失败");
         }
     }
 
@@ -325,7 +317,7 @@ public class LogActivity extends Activity {
             AppLog.i(AppLog.SYS, "已打开日志导出文件选择器");
         } catch (Exception e) {
             AppLog.e(AppLog.ERR, "无法打开导出界面 " + AppLog.stack(e));
-            Toast.makeText(this, "导出不可用：" + e.getMessage(), Toast.LENGTH_SHORT).show();
+            Ui.toast(this, "导出不可用：" + e.getMessage());
         }
     }
 
@@ -340,10 +332,10 @@ public class LogActivity extends Activity {
                 os.write(AppLog.exportText(this).getBytes("UTF-8"));
                 os.flush();
                 AppLog.ok(AppLog.SYS, "日志已导出到所选位置");
-                Toast.makeText(this, "日志已导出", Toast.LENGTH_SHORT).show();
+                Ui.toast(this, "日志已导出");
             } catch (Exception e) {
                 AppLog.e(AppLog.ERR, "日志导出失败 " + AppLog.stack(e));
-                Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
+                Ui.toast(this, "导出失败：" + e.getMessage());
             } finally {
                 if (os != null) try { os.close(); } catch (Exception ignored) {}
             }

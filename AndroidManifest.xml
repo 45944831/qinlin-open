@@ -15,7 +15,10 @@
         android:icon="@drawable/ic_launcher"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
-        <activity android:name=".MainActivity" android:exported="true">
+        <!-- configChanges：旋转不重建主界面——登录表单已输入内容、开门中按钮状态与
+             防连点标志都原样保留；旋转后的按钮重定位由 onConfigurationChanged 处理 -->
+        <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

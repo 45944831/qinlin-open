@@ -103,7 +103,10 @@ public final class SessionGuard {
         String tag = useCheckLogin ? "checkLogin" : "communityInfo";
         try {
             if (useCheckLogin) QinlinApi.checkLogin(token);
-            else QinlinApi.communities(token);
+            // checkLogin 给不出结论时只发一次短超时的 communityInfo：
+            // communities() 会串行试 4 种姿势（各 5s 连接 + 15s 读），
+            // 探活路径不能背这个预算——小部件开门的广播前台时限只有约 10 秒。
+            else QinlinApi.communitiesProbe(token);
             AppLog.i(AppLog.LOGIN, "会话探活成功（" + tag + "），服务端凭证仍有效");
             return OK;
         } catch (QinlinApi.ApiException e) {

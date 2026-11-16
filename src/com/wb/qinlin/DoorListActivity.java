@@ -16,7 +16,6 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.List;
 
@@ -70,16 +69,11 @@ public class DoorListActivity extends Activity {
     }
 
     private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density);
+        return Ui.dp(this, v);
     }
 
     private TextView label(String text, int sizeSp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
+        return Ui.label(this, text, sizeSp, color, bold);
     }
 
     private Button button(String text, int bg, int fg) {
@@ -274,12 +268,7 @@ public class DoorListActivity extends Activity {
     }
 
     private void toast(final String s) {
-        runOnUiThread(new Runnable() {
-            @Override public void run() {
-                // 与主界面一致：独立排队，不 cancel 上一条（ColorOS 会报 Toast already killed）
-                Toast.makeText(DoorListActivity.this, s, Toast.LENGTH_SHORT).show();
-            }
-        });
+        Ui.toast(this, s);
     }
 
     /** 首次打开：缓存优先渲染，再后台刷新。 */
@@ -308,11 +297,21 @@ public class DoorListActivity extends Activity {
                             ? cached.communityName : "读取中…")
                     + "\n缓存 · " + cached.age() + " · " + currentLine());
             renderDoors(cached.doors);
+            boolean fresh = allowCache && cached.fresh();
             status("已显示上次读取的 " + cached.doors.size() + " 扇门（" + cached.age()
-                    + "），正在后台刷新…");
+                    + (fresh ? "）。如需最新权限，点「↻ 刷新门列表」" : "），正在后台刷新…"));
         } else {
             subtitle(currentLine());
             status("正在读取小区与门列表…");
+        }
+
+        // ①-b 缓存新鲜（10 分钟内）就不再联网：每次进门列表都跑一轮
+        //     communities + 逐小区 doors 的串行请求，既慢又耗电。
+        //     主动点「↻ 刷新门列表」会走 allowCache=false，绕过此短路强制联网。
+        if (allowCache && cached != null && !cached.doors.isEmpty() && cached.fresh()) {
+            AppLog.i(AppLog.DOORS, trace, "门列表缓存新鲜（" + cached.age()
+                    + "），跳过本次联网刷新；点「↻ 刷新门列表」可强制更新");
+            return;
         }
 
         // ② 断网就立刻给结论：不必等 5 秒连接超时 + 15 秒读超时。

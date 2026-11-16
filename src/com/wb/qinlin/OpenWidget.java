@@ -6,11 +6,8 @@ import android.appwidget.AppWidgetProvider;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.TypedValue;
 import android.widget.RemoteViews;
-import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -501,15 +498,8 @@ public class OpenWidget extends AppWidgetProvider {
                 && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR);
     }
 
-    /** 后台线程也能提示：统一 post 到主线程。 */
+    /** 后台线程也能提示：统一由 Ui 切主线程（ColorOS 上不 cancel 上一条）。 */
     private static void toast(final Context c, final String s) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
-            @Override public void run() {
-                try {
-                    Toast.makeText(c, s, Toast.LENGTH_SHORT).show();
-                } catch (Throwable ignored) {
-                }
-            }
-        });
+        Ui.toast(c, s);
     }
 }

@@ -44,7 +44,11 @@ public class MainActivity extends Activity {
     /** 日志二级弹窗：只用来在返回时刷新入口上的条数。 */
     private static final int REQ_LOG = 1002;
 
-    /** 主界面配色（与效果图同一套色值，集中在这里避免逐个 Color.parseColor）。 */
+    /**
+     * 主界面配色（与效果图同一套色值，集中在这里避免逐个 Color.parseColor）。
+     * 全部界面用色都是编译期常量：refreshDoorLabel / refreshStats 这类高频刷新路径
+     * 不再每次解析字符串、分配新对象。
+     */
     private static final int C_BG = 0xFFF5F7FB;
     private static final int C_INK = 0xFF16233B;
     private static final int C_SUB = 0xFF5A6B85;
@@ -53,6 +57,36 @@ public class MainActivity extends Activity {
     private static final int C_BLUE = 0xFF2563EB;
     private static final int C_RED = 0xFFD93025;
     private static final int C_GREEN = 0xFF137333;
+    private static final int C_NAVY = 0xFF1B3A6B;         // 深蓝文字：浅蓝底按钮 / 日志入口
+    private static final int C_STEEL = 0xFF6B7688;        // 钢灰：未选门副标题 / 禁用按钮描边
+    private static final int C_FAIL = 0xFFB3261E;         // 失败红：记录 / 离线状态 / 警示字
+    private static final int C_DOOR_BG = 0xFFEAF1FF;      // 门形图示底（已选门）
+    private static final int C_DOOR_BG_OFF = 0xFFE7EAF0;  // 门形图示底（未选门）
+    private static final int C_BLUE_SOFT = 0xFFE3EAF6;    // 浅蓝按钮底（发送验证码 / 工具条）
+    private static final int C_RETRY_BG = 0xFFFFF1E9;     // 「重试连接」按钮底
+    private static final int C_RETRY_INK = 0xFF8A3B12;    // 「重试连接」按钮文字
+    private static final int C_TOGGLE_BG = 0xFFEEF2F9;    // 日志入口底
+    private static final int C_TOGGLE_EDGE = 0xFF9DB4DC;  // 日志入口描边
+    private static final int C_LOGOUT_EDGE = 0xFFF4C3BE;  // 退出胶囊描边
+    private static final int C_CARD_EDGE = 0xFFE2E8F2;    // 白卡描边
+    private static final int C_PILL_ON = 0xFFE6F4EA;      // 在线胶囊底
+    private static final int C_PILL_OFF = 0xFFFCEBEB;     // 离线胶囊底
+    private static final int C_LAST_BG = 0xFFF4F8FF;      // 「上次开门」摘要条底
+    private static final int C_LAST_EDGE = 0xFFE3ECFA;    // 「上次开门」摘要条描边
+    private static final int C_METRIC_DIV = 0xFFEDF1F7;   // 三格指标分隔线
+    private static final int C_HAIRLINE = 0xFFEEF1F6;     // 卡内 1px 分隔线
+    private static final int C_BANNER_1 = 0xFF16823C;     // 「已开门」横幅渐变起
+    private static final int C_BANNER_2 = 0xFF0E5C29;     // 「已开门」横幅渐变止
+    private static final int C_BANNER_EDGE = 0xFF0B4A22;  // 横幅描边
+    private static final int C_BANNER_SUB = 0xFFD7F0DE;   // 横幅副文案
+    private static final int C_HANDLE_OFF = 0xFFAAB3C2;   // 门把手（未选门灰）
+    // 开门按钮三态渐变（默认红 / 按压深红 / 禁用灰）
+    private static final int C_BTN_TOP = 0xFFF0463C;
+    private static final int C_BTN_BOTTOM = 0xFFC5221F;
+    private static final int C_BTN_EDGE = 0xFFA51B18;
+    private static final int C_BTN_PRESS_BOTTOM = 0xFF8E1512;
+    private static final int C_BTN_PRESS_EDGE = 0xFF7A100E;
+    private static final int C_BTN_OFF_BOTTOM = 0xFF7C899D;
 
     /** 记录卡默认展示行数；点「全部」展开到 10 行。 */
     private static final int DEFAULT_RECORDS = 3;
@@ -183,11 +217,19 @@ public class MainActivity extends Activity {
                     + "，可直接开门；若提示凭证失效请重新登录");
         }
 
-        // 已登录但本机还没存过小区名（例如刚升级到登录态版本）：后台静默补齐，
-        // 不弹 busy、不滚动状态框，避免一打开 App 就跳到页面底部。
+        // 已登录但本机还没存过小区名（例如刚升级到登录态版本）：先看门列表缓存——
+        // 缓存里本来就带小区名（同一账号），直接复用可省一次 communityInfo 请求；
+        // 没有缓存才后台静默补齐，不弹 busy、不滚动状态框，避免一打开 App 就跳到页面底部。
         String savedSession = Prefs.session(this);
         if (Prefs.loggedIn(this) && Prefs.communityName(this).length() == 0) {
-            loadCommunityName(savedSession);
+            DoorCache.Data dc = DoorCache.load(this);
+            if (dc != null && dc.communityName.length() > 0) {
+                Prefs.setCommunityName(this, dc.communityName);
+                AppLog.i(AppLog.DOORS, "从门列表缓存补齐小区名：" + dc.communityName + "（省一次联网）");
+                applyLoginState();   // 顶部账号卡片标题此时才有内容可显示
+            } else {
+                loadCommunityName(savedSession);
+            }
         }
 
         // 首次使用 / 还没确认过要控制的门：进门列表选门，选完再回主界面。
@@ -224,6 +266,18 @@ public class MainActivity extends Activity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) centerOpenButton();
+    }
+
+    /**
+     * Manifest 已声明 orientation|screenSize|keyboardHidden：旋转不重建 Activity，
+     * 登录表单里已输入的手机号 / 验证码不会丢，开门中的按钮状态与防连点标志也原样保留
+     * （重建会把 opening 复位，理论上可再次下发开门指令——这是原本的隐患之一）。
+     * 代价是窗口尺寸变了要自己重新校正按钮位置。
+     */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        centerOpenButton();   // 旋转后窗口高度变化，把按钮重新校回 57% 单手区
     }
 
     /**
@@ -287,17 +341,13 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 统一的小工具收敛在 {@link Ui}，这里只保留一行委托，调用点不用改。 */
     private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density);
+        return Ui.dp(this, v);
     }
 
     private TextView label(String text, int sizeSp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
+        return Ui.label(this, text, sizeSp, color, bold);
     }
 
     private Button button(String text, int bg, int fg) {
@@ -320,21 +370,21 @@ public class MainActivity extends Activity {
     private StateListDrawable makeOpenButtonDrawable() {
         GradientDrawable normal = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { Color.parseColor("#F0463C"), Color.parseColor("#C5221F") });
+                new int[] { C_BTN_TOP, C_BTN_BOTTOM });
         normal.setCornerRadius(dp(18));
-        normal.setStroke(dp(1), Color.parseColor("#A51B18"));
+        normal.setStroke(dp(1), C_BTN_EDGE);
 
         GradientDrawable pressed = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { Color.parseColor("#C5221F"), Color.parseColor("#8E1512") });
+                new int[] { C_BTN_BOTTOM, C_BTN_PRESS_BOTTOM });
         pressed.setCornerRadius(dp(18));
-        pressed.setStroke(dp(2), Color.parseColor("#7A100E"));
+        pressed.setStroke(dp(2), C_BTN_PRESS_EDGE);
 
         GradientDrawable disabled = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] { Color.parseColor("#9AA7BC"), Color.parseColor("#7C899D") });
+                new int[] { C_FAINT, C_BTN_OFF_BOTTOM });
         disabled.setCornerRadius(dp(18));
-        disabled.setStroke(dp(1), Color.parseColor("#6B7688"));
+        disabled.setStroke(dp(1), C_STEEL);
 
         StateListDrawable s = new StateListDrawable();
         s.addState(new int[] { android.R.attr.state_pressed }, pressed);
@@ -355,10 +405,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * 后台线程回到界面前的存活检查：开门请求最长可跑十几秒，
+     * 期间 Activity 可能已 finish / destroy，这时绝不能再碰它的 View。
+     */
+    private boolean uiAlive() {
+        return !isFinishing() && !isDestroyed();
+    }
+
     /** 成功 / 失败都复位按钮；成功后短暂显示「已开门 ✓」，不用低头看日志也能确认。 */
     private void finishOpen(final boolean success) {
         runOnUiThread(new Runnable() {
             @Override public void run() {
+                if (!uiAlive()) return;
                 opening = false;
                 if (resetOpenBtnTask != null) uiHandler.removeCallbacks(resetOpenBtnTask);
                 applyOpenButtonState(false, success ? "已开门 ✓" : "开  门");
@@ -421,7 +480,7 @@ public class MainActivity extends Activity {
         icon.setLayoutParams(new LinearLayout.LayoutParams(dp(64), dp(64)));
 
         doorCardBg = new GradientDrawable();
-        doorCardBg.setColor(Color.parseColor("#EAF1FF"));
+        doorCardBg.setColor(C_DOOR_BG);
         doorCardBg.setCornerRadius(dp(15));
         doorCardBg.setStroke(dp(2), C_BLUE);
         icon.setBackground(doorCardBg);
@@ -482,8 +541,8 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, dp(6), 0, 0);
-        Button smsBtn = button("发送验证码", Color.parseColor("#E3EAF6"),
-                Color.parseColor("#1B3A6B"));
+        Button smsBtn = button("发送验证码", C_BLUE_SOFT,
+                C_NAVY);
         Button loginBtn = button("登录", C_BLUE, Color.WHITE);
         LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -499,8 +558,8 @@ public class MainActivity extends Activity {
 
         // 服务端会话超时后本机凭证仍在：先给一次「重新检查登录状态」的机会，
         // 只有确认恢复不了才需要重新收短信。默认隐藏，避免干扰首次登录。
-        retryBtn = button("凭证已失效？点此重试连接", Color.parseColor("#FFF1E9"),
-                Color.parseColor("#8A3B12"));
+        retryBtn = button("凭证已失效？点此重试连接", C_RETRY_BG,
+                C_RETRY_INK);
         LinearLayout.LayoutParams retryLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         retryLp.topMargin = dp(6);
@@ -594,11 +653,11 @@ public class MainActivity extends Activity {
         logToggle.setAllCaps(false);
         logToggle.setTextSize(13);
         logToggle.setTypeface(Typeface.DEFAULT_BOLD);
-        logToggle.setTextColor(Color.parseColor("#1B3A6B"));
+        logToggle.setTextColor(C_NAVY);
         GradientDrawable toggleBg = new GradientDrawable();
-        toggleBg.setColor(Color.parseColor("#EEF2F9"));
+        toggleBg.setColor(C_TOGGLE_BG);
         toggleBg.setCornerRadius(dp(12));
-        toggleBg.setStroke(dp(1), Color.parseColor("#9DB4DC"));
+        toggleBg.setStroke(dp(1), C_TOGGLE_EDGE);
         logToggle.setBackground(toggleBg);
         logToggle.setMinHeight(dp(46));
         logToggle.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -665,7 +724,7 @@ public class MainActivity extends Activity {
         GradientDrawable pill = new GradientDrawable();
         pill.setColor(Color.WHITE);
         pill.setCornerRadius(dp(99));
-        pill.setStroke(dp(1), Color.parseColor("#F4C3BE"));
+        pill.setStroke(dp(1), C_LOGOUT_EDGE);
         logout.setBackground(pill);
         logout.setGravity(Gravity.CENTER);
         logout.setPadding(dp(14), dp(7), dp(14), dp(7));
@@ -690,7 +749,7 @@ public class MainActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.WHITE);
         bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), Color.parseColor("#E2E8F2"));
+        bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(1));
 
@@ -718,7 +777,7 @@ public class MainActivity extends Activity {
         doorTagTv = label("在线", 11, C_GREEN, true);
         doorTagTv.setTextSize(10.5f);
         onlinePillBg = new GradientDrawable();
-        onlinePillBg.setColor(Color.parseColor("#E6F4EA"));
+        onlinePillBg.setColor(C_PILL_ON);
         onlinePillBg.setCornerRadius(dp(99));
         doorTagTv.setBackground(onlinePillBg);
         doorTagTv.setPadding(dp(9), dp(3), dp(9), dp(3));
@@ -733,9 +792,9 @@ public class MainActivity extends Activity {
         lastRow.setGravity(Gravity.CENTER_VERTICAL);
         lastRow.setPadding(dp(11), dp(9), dp(11), dp(9));
         GradientDrawable lastBg = new GradientDrawable();
-        lastBg.setColor(Color.parseColor("#F4F8FF"));
+        lastBg.setColor(C_LAST_BG);
         lastBg.setCornerRadius(dp(10));
-        lastBg.setStroke(dp(1), Color.parseColor("#E3ECFA"));
+        lastBg.setStroke(dp(1), C_LAST_EDGE);
         lastRow.setBackground(lastBg);
         LinearLayout.LayoutParams lastLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -770,7 +829,7 @@ public class MainActivity extends Activity {
         LinearLayout warn = new LinearLayout(this);
         warn.setOrientation(LinearLayout.HORIZONTAL);
         warn.setPadding(0, dp(8), 0, 0);
-        TextView warnKey = label("注意", 10, Color.parseColor("#B3261E"), true);
+        TextView warnKey = label("注意", 10, C_FAIL, true);
         warnKey.setTextSize(10.5f);
         warn.addView(warnKey);
         TextView warnTv = label("成功响应仅表示平台已接受指令，请现场确认门是否打开。",
@@ -821,7 +880,7 @@ public class MainActivity extends Activity {
 
     private void addMetricDivider(LinearLayout parent) {
         View d = new View(this);
-        d.setBackgroundColor(Color.parseColor("#EDF1F7"));
+        d.setBackgroundColor(C_METRIC_DIV);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(1), dp(26));
         lp.setMargins(dp(9), dp(8), dp(9), 0);
         parent.addView(d, lp);
@@ -830,7 +889,7 @@ public class MainActivity extends Activity {
     /** 1px 分隔线，带顶部外边距（用来替代层层嵌套的卡片边框）。 */
     private View divider(int topMarginDp) {
         View d = new View(this);
-        d.setBackgroundColor(Color.parseColor("#EEF1F6"));
+        d.setBackgroundColor(C_HAIRLINE);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
         lp.topMargin = dp(topMarginDp);
@@ -846,7 +905,7 @@ public class MainActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.WHITE);
         bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), Color.parseColor("#E2E8F2"));
+        bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(1));
 
@@ -920,7 +979,7 @@ public class MainActivity extends Activity {
             } else {
                 text = (it.note.length() > 0 ? "失败 · " + it.note : "失败") + tail;
             }
-            TextView result = label(text, 12, it.ok ? C_INK : Color.parseColor("#B3261E"), false);
+            TextView result = label(text, 12, it.ok ? C_INK : C_FAIL, false);
             result.setSingleLine(true);
             result.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams resultLp = new LinearLayout.LayoutParams(
@@ -962,7 +1021,7 @@ public class MainActivity extends Activity {
 
         boolean online = Net.online(this);
         statGwTv.setText(online ? "正常" : "离线");
-        statGwTv.setTextColor(online ? C_GREEN : Color.parseColor("#B3261E"));
+        statGwTv.setTextColor(online ? C_GREEN : C_FAIL);
 
         if (lastOpenTv != null && lastMsTv != null) {
             if (last == null) {
@@ -972,7 +1031,7 @@ public class MainActivity extends Activity {
             } else {
                 lastOpenTv.setText(OpenRecord.relative(last.at)
                         + " · " + (last.ok ? "成功" : "失败"));
-                lastOpenTv.setTextColor(last.ok ? C_INK : Color.parseColor("#B3261E"));
+                lastOpenTv.setTextColor(last.ok ? C_INK : C_FAIL);
                 lastMsTv.setText(last.ok && last.ms > 0
                         ? OpenRecord.seconds(last.ms) + "s" : "");
                 lastMsTv.setTextColor(last.ok ? C_GREEN : C_MUTED);
@@ -1020,9 +1079,9 @@ public class MainActivity extends Activity {
         bar.setPadding(dp(14), dp(12), dp(14), dp(12));
         GradientDrawable bg = new GradientDrawable();
         bg.setOrientation(GradientDrawable.Orientation.LEFT_RIGHT);
-        bg.setColors(new int[] { Color.parseColor("#16823C"), Color.parseColor("#0E5C29") });
+        bg.setColors(new int[] { C_BANNER_1, C_BANNER_2 });
         bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), Color.parseColor("#0B4A22"));
+        bg.setStroke(dp(1), C_BANNER_EDGE);
         bar.setBackground(bg);
         bar.setElevation(dp(12));
 
@@ -1031,7 +1090,7 @@ public class MainActivity extends Activity {
         mark.setTextSize(20);
         mark.setTypeface(Typeface.DEFAULT_BOLD);
         mark.setGravity(Gravity.CENTER);
-        mark.setTextColor(Color.parseColor("#137333"));
+        mark.setTextColor(C_GREEN);
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
         circle.setColor(Color.WHITE);
@@ -1043,7 +1102,7 @@ public class MainActivity extends Activity {
         text.setPadding(dp(12), 0, 0, 0);
         text.addView(label("已开门", 18, Color.WHITE, true));
         TextView sub = label("平台已接受指令 · 请现场确认门是否打开", 12,
-                Color.parseColor("#D7F0DE"), false);
+                C_BANNER_SUB, false);
         sub.setPadding(0, dp(2), 0, 0);
         text.addView(sub);
         bar.addView(text, new LinearLayout.LayoutParams(
@@ -1055,6 +1114,7 @@ public class MainActivity extends Activity {
     private void showOpenedBanner() {
         runOnUiThread(new Runnable() {
             @Override public void run() {
+                if (!uiAlive()) return;
                 uiHandler.removeCallbacks(hideBannerTask);
                 if (openBanner == null) return;
                 openBanner.setVisibility(View.VISIBLE);
@@ -1172,7 +1232,7 @@ public class MainActivity extends Activity {
         // 等主界面首帧画完再弹浮层：否则浮层背后是空白，视觉上像直接进了门列表页
         uiHandler.postDelayed(new Runnable() {
             @Override public void run() {
-                if (isFinishing()) return;
+                if (!uiAlive()) return;
                 openDoorList(true);
             }
         }, 260);
@@ -1233,12 +1293,10 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 后台节流探活：onCreate / onResume 都会调，间隔由 SessionGuard 控制（30 分钟）。
-     * 只有登录态真的发生变化（例如从「已超时」自动恢复）才刷新界面，避免无谓重排。
-     */
-    /**
-     * 按需探活：只在冷启动 / 回前台时检查一次凭证是否已被服务端作废，带短节流防抖。
+     * 按需探活：只在冷启动 / 回前台时检查一次凭证是否已被服务端作废，
+     * 带 {@link SessionGuard} 的短节流防抖（5 分钟），避免反复切前后台时重复发请求。
      * 不做任何定时或后台唤醒——服务端按账号单会话，新登录会作废旧凭证，轮询挡不住。
+     * 只有登录态真的发生变化（例如从「已超时」自动恢复）才刷新界面，避免无谓重排。
      */
     private void probeOnForegroundAsync() {
         final Context c = getApplicationContext();
@@ -1250,7 +1308,7 @@ public class MainActivity extends Activity {
                 if (before != after) {
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
-                            if (isFinishing()) return;
+                            if (!uiAlive()) return;
                             applyLoginState();
                             OpenWidget.refreshAll(MainActivity.this);
                             if (after) toast("登录状态已自动恢复，可以继续开门");
@@ -1270,7 +1328,7 @@ public class MainActivity extends Activity {
                 final boolean ok = SessionGuard.retry(c);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
-                        if (isFinishing()) return;
+                        if (!uiAlive()) return;
                         applyLoginState();
                         OpenWidget.refreshAll(MainActivity.this);
                         toast(ok ? "登录状态已恢复，可以继续开门"
@@ -1349,20 +1407,7 @@ public class MainActivity extends Activity {
         toast(s);
     }
 
-    private void toast(final String s) { showToast(s, Toast.LENGTH_SHORT); }
-
-    /**
-     * 真机实测：ColorOS 上「先 cancel 旧 Toast 再 show 新 Toast」会触发
-     * NotificationService 的 "Toast already killed / already cancelled"，连续提示反而被丢掉。
-     * 改为每条独立排队、由系统自己管理生命周期；关键反馈另有状态框与顶部横幅兜底。
-     */
-    private void showToast(final String s, final int duration) {
-        runOnUiThread(new Runnable() {
-            @Override public void run() {
-                Toast.makeText(MainActivity.this, s, duration).show();
-            }
-        });
-    }
+    private void toast(final String s) { Ui.toast(this, s); }
 
     /**
      * 每次后台操作生成 traceId 并绑定线程：网络层的请求 / 响应 / 业务码 / 异常
@@ -1406,7 +1451,7 @@ public class MainActivity extends Activity {
                     final boolean dead = SessionGuard.expiredAfterRetry(MainActivity.this);
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
-                            if (isFinishing()) return;
+                            if (!uiAlive()) return;
                             if (dead) {
                                 applyLoginState();
                                 AppLog.w(AppLog.LOGIN, trace,
@@ -1495,22 +1540,39 @@ public class MainActivity extends Activity {
                     AppLog.w(AppLog.LOGIN, "手机号变化（" + AppLog.maskPhone(prevPhone)
                             + " → " + AppLog.maskPhone(phone) + "）：已清除旧账号的门选择，重新引导选门");
                 }
-                applyLoginState();  // 立刻把界面切成「已登录」：账号卡片 + 退出按钮
-                refreshDoorLabel(); // 同步刷新门卡片的「会话保存于」为新凭证写入时间
-                        toast("登录成功，凭证已更新");
+                applyLoginState();  // 立刻把界面切成「已登录」：账号卡片 + 退出按钮（内部自带主线程切换）
+                refreshDoorLabel(); // 同步刷新门卡片的「会话保存于」为新凭证写入时间（同样线程安全）
+                toast("登录成功，凭证已更新");
                 statusOk("登录成功：凭证已更新并保存在本机。");
                 loadCommunityName(token);   // 只补小区名，门列表交给悬浮二级界面
-                // 首次登录（本机还没确认过要控制的门）→ 直接弹出选门浮层，选完再回主界面
-                onboardingShown = false;
+                // 首次登录（本机还没确认过要控制的门）→ 直接弹出选门浮层，选完再回主界面。
+                // onboardingShown 的复位放进主线程投递，避免后台写 / 主线程读的可见性缝隙。
                 runOnUiThread(new Runnable() {
-                    @Override public void run() { maybeShowOnboarding(); }
+                    @Override public void run() {
+                        onboardingShown = false;
+                        maybeShowOnboarding();
+                    }
                 });
             }
         });
     }
 
-    /** 把本机保存的选择显示在主界面的门卡片；门列表本身在悬浮二级界面里。 */
+    /**
+     * 把本机保存的选择显示在主界面的门卡片；门列表本身在悬浮二级界面里。
+     * 可在后台线程安全调用：登录回调（doLogin 的 async 后台线程）会直接调这里
+     * 刷新「会话保存于」，与 applyLoginState() 一样按需切回主线程再碰 View。
+     */
     private void refreshDoorLabel() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            refreshDoorLabelUi();
+        } else {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { refreshDoorLabelUi(); }
+            });
+        }
+    }
+
+    private void refreshDoorLabelUi() {
         int cid = Prefs.communityId(this);
         int did = Prefs.doorId(this);
         String name = Prefs.doorName(this);
@@ -1542,23 +1604,23 @@ public class MainActivity extends Activity {
             // 在线胶囊：Unknown 时不硬说「离线」，只显示「在线」或原始值
             boolean isOnline = "online".equalsIgnoreCase(online) || online.length() == 0;
             doorTagTv.setText(isOnline ? "在线" : online);
-            doorTagTv.setTextColor(isOnline ? C_GREEN : Color.parseColor("#B3261E"));
+            doorTagTv.setTextColor(isOnline ? C_GREEN : C_FAIL);
             if (onlinePillBg != null) {
-                onlinePillBg.setColor(Color.parseColor(isOnline ? "#E6F4EA" : "#FCEBEB"));
+                onlinePillBg.setColor((isOnline ? C_PILL_ON : C_PILL_OFF));
             }
             doorTagTv.setVisibility(View.VISIBLE);
         } else {
             selectedDoorTv.setText("尚未选择门");
             doorStateTv.setText("点下方「切换门」选一扇，选中的门会显示在这里");
-            doorStateTv.setTextColor(Color.parseColor("#6B7688"));
+            doorStateTv.setTextColor(C_STEEL);
             doorMetaTv.setText("登录后可选择要控制的门");
             doorTagTv.setVisibility(View.GONE);
         }
         // 门形图示随选中态换色（刷新/重启后依旧一致）
-        doorCardBg.setColor(Color.parseColor(on ? "#EAF1FF" : "#E7EAF0"));
-        doorCardBg.setStroke(dp(2), Color.parseColor(on ? "#2563EB" : "#9AA7BC"));
-        doorPlateBg.setStroke(dp(2), Color.parseColor(on ? "#2563EB" : "#9AA7BC"));
-        doorHandleBg.setColor(Color.parseColor(on ? "#D93025" : "#AAB3C2"));
+        doorCardBg.setColor(on ? C_DOOR_BG : C_DOOR_BG_OFF);
+        doorCardBg.setStroke(dp(2), (on ? C_BLUE : C_FAINT));
+        doorPlateBg.setStroke(dp(2), (on ? C_BLUE : C_FAINT));
+        doorHandleBg.setColor((on ? C_RED : C_HANDLE_OFF));
     }
 
     private void doOpen() {
@@ -1583,16 +1645,14 @@ public class MainActivity extends Activity {
                 + " | 门=" + Prefs.doorName(this)
                 + " | 凭证写入=" + AppLog.time(Prefs.sessionSavedAt(this)));
 
-        if (!Prefs.loggedIn(this)) {
-            AppLog.w(AppLog.OPEN, trace, token.length() == 0
-                    ? "前置校验失败：session 为空（界面显示已登录但本机无凭证）"
-                    : "前置校验失败：凭证已被标记超时，请先点「重试连接」");
-            notifyUser(token.length() == 0 ? "请先登录" : "登录已超时，请点「重试连接」或重新登录");
+        if (token.length() == 0) {
+            AppLog.w(AppLog.OPEN, trace, "前置校验失败：session 为空（界面显示已登录但本机无凭证）");
+            notifyUser("请先登录");
             return;
         }
         if (cid <= 0 || did <= 0) {
             AppLog.w(AppLog.OPEN, trace, "前置校验失败：未选择门 cid=" + cid + " did=" + did);
-            notifyUser("请先点「门列表 ▸」选一扇门");
+            notifyUser("请先点「切换门 ▸」选一扇门");
             return;
         }
         if (savedFp.length() == 0) {
@@ -1608,6 +1668,63 @@ public class MainActivity extends Activity {
         }
         AppLog.i(AppLog.OPEN, trace, "网络就绪 → " + Net.describe(this) + "，开始下发开门指令");
 
+        // 凭证仍在但被服务端标记超时：与桌面小部件走同一条自动恢复路径，
+        // 探活成功就直接继续开门。之前 App 里要求手动点「重试连接」、
+        // 小部件却能自动恢复，同一状态「桌面能开、App 里不能开」，两边行为已统一。
+        if (!Prefs.loggedIn(this)) {
+            autoRecoverThenOpen(trace, clickAt);
+            return;
+        }
+        startOpen(trace, clickAt);
+    }
+
+    /**
+     * 开门前自动恢复登录态（后台探活一次）：成功则接着真正下发开门指令，
+     * 失败则回到「登录已超时」的既有提示。按钮全程锁定为「恢复登录…」，防止连点。
+     */
+    private void autoRecoverThenOpen(final String trace, final long clickAt) {
+        AppLog.i(AppLog.OPEN, trace, "凭证被标记超时但本机仍保留 → 开门前自动探活恢复（与小部件一致）");
+        opening = true;
+        if (resetOpenBtnTask != null) uiHandler.removeCallbacks(resetOpenBtnTask);
+        applyOpenButtonState(true, "恢复登录…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final boolean ok = SessionGuard.retry(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (!uiAlive()) return;
+                        applyLoginState();                  // 恢复与否都同步一次登录态界面
+                        OpenWidget.refreshAll(MainActivity.this);
+                    }
+                });
+                if (ok) {
+                    AppLog.ok(AppLog.LOGIN, trace, "开门前探活成功 → 凭证恢复，继续开门");
+                    startOpen(trace, clickAt);              // startOpen 自带主线程切换，后台调用安全
+                } else {
+                    AppLog.w(AppLog.OPEN, trace, "开门前探活未恢复 → 保持登录表单；可点「重试连接」或重新短信登录");
+                    finishOpen(false);
+                    notifyUser("登录已失效：凭证已保留，请点「重试连接」或重新登录");
+                }
+            }
+        }, "session-auto-retry").start();
+    }
+
+    /** 真正下发开门指令的入口：任意线程可调（自动恢复路径在后台线程接着调它）。 */
+    private void startOpen(final String trace, final long clickAt) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            startOpenUi(trace, clickAt);
+        } else {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { startOpenUi(trace, clickAt); }
+            });
+        }
+    }
+
+    private void startOpenUi(final String trace, final long clickAt) {
+        if (!uiAlive()) {
+            opening = false;
+            return;
+        }
         // 校验全部通过后才锁按钮：前置校验失败（未登录 / 未选门）不会让按钮卡在禁用态。
         opening = true;
         if (resetOpenBtnTask != null) uiHandler.removeCallbacks(resetOpenBtnTask);
@@ -1619,7 +1736,8 @@ public class MainActivity extends Activity {
                 boolean succeeded = false;
                 String failNote = "未成功";
                 try {
-                    final String raw = QinlinApi.openDoor(token, cid, did);
+                    final String raw = QinlinApi.openDoor(Prefs.session(MainActivity.this),
+                            Prefs.communityId(MainActivity.this), Prefs.doorId(MainActivity.this));
                     succeeded = true;
                     showOpenedBanner();   // 顶部样式化提示，不再用会被手指挡住的底部 Toast
                     AppLog.ok(AppLog.OPEN, "服务端原文（已脱敏）：" + raw);

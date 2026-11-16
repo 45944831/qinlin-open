@@ -40,6 +40,15 @@ public final class QinlinApi {
 
     private static final SecureRandom RND = new SecureRandom();
 
+    /**
+     * 探活类只读请求的超时预算（checkLogin / 单次 communityInfo 兜底）。
+     * 探活只是确认凭证死活，等太久没有意义——尤其是小部件路径：
+     * goAsync() 的广播前台时限约 10 秒，探活必须留足余量给真正的开门请求。
+     * 登录 / 开门仍用各自的默认超时（见 request()）。
+     */
+    static final int PROBE_CONNECT_MS = 5000;
+    static final int PROBE_READ_MS = 6000;
+
     private QinlinApi() {}
 
     public static class ApiException extends Exception {
@@ -253,6 +262,13 @@ public final class QinlinApi {
     private static String request(String base, LinkedHashMap<String, String> headers,
                                   TreeMap<String, String> params, String body,
                                   String contentType) throws Exception {
+        return request(base, headers, params, body, contentType, 5000, 15000);
+    }
+
+    /** 带超时预算的通用请求：探活走短读超时，登录 / 开门保持「宁可多等」的默认值。 */
+    private static String request(String base, LinkedHashMap<String, String> headers,
+                                  TreeMap<String, String> params, String body,
+                                  String contentType, int connectMs, int readMs) throws Exception {
         final long t0 = System.currentTimeMillis();
         String path = base;
         int q = path.indexOf('?');
@@ -270,8 +286,8 @@ public final class QinlinApi {
         try {
             conn = (HttpURLConnection) new URL(buildUrl(base, params)).openConnection();
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(15000);
+            conn.setConnectTimeout(connectMs);
+            conn.setReadTimeout(readMs);
             conn.setInstanceFollowRedirects(false);
             for (Map.Entry<String, String> e : headers.entrySet()) {
                 conn.setRequestProperty(e.getKey(), e.getValue());
@@ -363,6 +379,12 @@ public final class QinlinApi {
 
     private static Object post(String path, TreeMap<String, String> fields,
                                String token, String mode, boolean numericJson) throws Exception {
+        return post(path, fields, token, mode, numericJson, 5000, 15000);
+    }
+
+    private static Object post(String path, TreeMap<String, String> fields,
+                               String token, String mode, boolean numericJson,
+                               int connectMs, int readMs) throws Exception {
         AppLog.i(AppLog.NET, "组装请求 " + path + " | mode=" + mode
                 + " | session=" + AppLog.fp(token)
                 + " | 字段=" + fields.keySet());
@@ -394,7 +416,7 @@ public final class QinlinApi {
             payload = jsonBody(body, numericJson);
             contentType = "application/json; charset=utf-8";
         }
-        String text = request(BASE + path, headers, params, payload, contentType);
+        String text = request(BASE + path, headers, params, payload, contentType, connectMs, readMs);
         return unwrap(text, token != null && token.length() > 0);
     }
 
@@ -457,12 +479,15 @@ public final class QinlinApi {
      * /api/app/v1/checkLogin 路由存在（返回 401「登录已超时」）。
      *
      * 只读、无业务副作用。用途有二：
-     * ① 定期让服务端会话保持活跃，避免长时间不请求被判空闲超时；
+     * ① 前台按需检查凭证是否已被服务端作废（防抖窗口见 SessionGuard）；
      * ② 收到 401 后再单独确认一次，区分「真超时」与「网关偶发误判 / 网络抖动」。
+     *
+     * 用探活短超时（PROBE_*）：探活本身很轻，等太久没有意义，
+     * 且小部件路径的广播前台时限只有约 10 秒，预算必须留给开门请求。
      */
     public static void checkLogin(String token) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
-        post("/api/app/v1/checkLogin", f, token, "json");
+        post("/api/app/v1/checkLogin", f, token, "json", true, PROBE_CONNECT_MS, PROBE_READ_MS);
     }
 
     /**
@@ -582,6 +607,28 @@ public final class QinlinApi {
         }
         AppLog.i(AppLog.DOORS, "解析到 " + out.size() + " 个小区");
         return out;
+    }
+
+    /**
+     * 单次小区列表请求：仅供 {@link SessionGuard} 在 checkLogin 给不出结论时兜底探活。
+     * 与 {@link #communities} 的区别：只发一个请求（用上次成功的姿势或默认姿势）、
+     * 探活短超时、绝不逐姿势串行重试——communities() 最坏会连试 4 种姿势，
+     * 每次 5 秒连接 + 15 秒读，探活路径的总预算会完全失控（小部件广播前台约 10 秒）。
+     * 失败直接抛异常，由调用方判定。
+     */
+    static void communitiesProbe(String token) throws Exception {
+        TreeMap<String, String> f = new TreeMap<String, String>();
+        f.put("method", "communityInfo");
+        final String[] modes = {"json", "form", "query", "json"};
+        final boolean[] nums = {true, false, false, false};
+        final String[] names = {"JSON/数值字段", "表单", "URL参数", "JSON/全字符串"};
+        int mode = (PREFERRED_COMM_MODE >= 0 && PREFERRED_COMM_MODE < modes.length)
+                ? PREFERRED_COMM_MODE : 0;
+        AppLog.i(AppLog.DOORS, "探活兜底：单次 communityInfo（" + names[mode] + "，短超时，不串行重试）");
+        post("/api/app/user/v2/communityInfo", f, token, modes[mode], nums[mode],
+                PROBE_CONNECT_MS, PROBE_READ_MS);
+        PREFERRED_COMM_MODE = mode;
+        DIAG.set("小区列表：已用「" + names[mode] + "」方式成功");
     }
 
     public static List<Door> doors(String token, int communityId) throws Exception {

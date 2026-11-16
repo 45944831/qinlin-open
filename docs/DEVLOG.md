@@ -1337,3 +1337,94 @@ HTTP 200 `{"code":0,"data":7776000,"message":"操作成功"}` →
 
 日志留存：`E:\WorkBuddy1\2026-11-11-22-25-45\qinlin-install-1133-logcat.txt`。
 回退包：`qinlin-open-20261112-1056-backup.apk`（同证书，可直接 `adb install -r`）。
+
+---
+
+## 2026-11-13 状态勘误（历史原文保留，只追加最终结论）
+
+本文是**按时间追加的归档**。上文各段里的「未打包 / 待排查 / 未验证 / 未提交」都是
+**当时的真实状态**，此处不改写历史，只统一标注最终结论，避免把旧状态误读成现状。
+
+| 旧表述（位置） | 最终状态 |
+| --- | --- |
+| 11:03 段「小瑕疵：登录瞬间门卡片显示旧时间，待下次打包修」 | **已修**：11:17 在登录成功回调补 `refreshDoorLabel()`，随 11:24 新包覆盖安装；本轮未重新短信登录，该场景仍需下次登录时确认 |
+| 11:03 段「⚠️ 新发现（待排查）：已登录态前台按需探活 0 次触发」 | **已闭环，非缺陷**：11:17 新增 `前台探活判定` 日志；11:34 实测超窗即发 `checkLogin`、5 分钟内命中防抖跳过，两条分支均符合设计。此前 0 次是反复重启都落在防抖窗口内 |
+| 11:03 段「仍未验证：有效凭证下 `checkLogin code:0`」 | **已验证**：11:34:28 HTTP 200 `{"code":0,"data":7776000}`，新包在有效凭证下的首次真机确认 |
+| 11:17 段「⚠️ 覆盖安装未完成（真机掉线）/ 待用户重新插线」 | **已完成**：11:33 用户重连，`adb install -r` Success，数据保留、无崩溃，见 11:33 段。该段保留作为掉线排查记录 |
+| 11:17 / 11:33 段「未提交、未发布、未上传」 | **已推送**：11:45 commit `861aaa1` → `origin/main`（`ee7848b..861aaa1`）。旧表述只代表当时状态 |
+| 10:40 及以前的「约 48 小时绝对 TTL」「30 分钟探活可续期」推断 | **已被推翻**：11:21 互踢实验证实服务端按账号单会话；周期轮询已移除。详见 README「登录为什么会失效」 |
+| 各段「本轮未打包、未发布」 | 均为各自时间点的记录；最终产物是 11:24 构建、11:33 覆盖安装的方案 B 包 |
+
+**截至 2026-11-13 仍未验证**：新包下实际物理开门复测、耗电对比、反向互踢
+（用户未要求，未操作官方 App）、登录瞬间门卡片时间的现场确认。
+
+**脱敏说明**：推送前已把本文新增内容里的真机小区名 / 门 ID / 手机号 /
+设备序列号 / 凭证指纹替换为示例值；未脱敏原件保存在工作区，**未进仓库**。
+
+**本地原件清理（2026-11-13）**：工作区里 3 份早期备份 APK
+（`qinlin-open-20261111-1122-backup.apk` / `qinlin-open-20261112-0947-backup.apk` /
+`qinlin-open-20261112-1007-backup.apk`）与 `official-app-relogin-logcat.txt`
+已移入回收站；**完整副本保存在
+`E:\WorkBuddy1\2026-11-11-22-25-45\_cleanup_backup_20261113\`**（MD5 校验一致），
+需要时可从那里还原。上文中引用这几份原件的段落，结论仍以本文为准；
+`qinlin-open-20261112-1056-backup.apk` 保留作为可回退包。
+
+---
+
+## 2026-11-14 ~ 11-16 代码优化（源码已改，未打包 / 未提交）
+
+### 11-14 只读审查
+通读全部 5235 行 Java 后给出优先级清单。最高优先级一条：登录回调 `doLogin()`
+原在后台线程直接调 `refreshDoorLabel()` 操作十几个 View，而同处 `applyLoginState()`
+自带主线程切换，有 `CalledFromWrongThreadException` 风险（源于 11-12 11:17 补
+「会话保存于」刷新那次改动，此后未重新短信登录，真机一直没走到该路径）。
+其余建议：两入口过期态统一、弱网总超时预算、主线程 IO、旋转屏状态保存、
+`DoorCache.fresh()` 从未接入、资源与文案收敛、构建自动校验。
+
+### 11-15 ~ 11-16 已落地（源码级）
+| 项 | 实现 |
+| --- | --- |
+| P0 线程安全 | `refreshDoorLabel()` 拆为自身 Looper 判断 + `refreshDoorLabelUi()`，任意线程可调 |
+| 旋转屏 | Manifest 给 MainActivity 加 `configChanges`，新增 `onConfigurationChanged()` 重定位按钮；表单输入与 `opening` 防连点标志不再被重建复位 |
+| 后台回调存活检查 | 新增 `uiAlive()`（`isFinishing() / isDestroyed()`），开门结果等主线程回调统一守卫 |
+| 探活超时预算 | `QinlinApi` 新增 `PROBE_CONNECT_MS=5000 / PROBE_READ_MS=6000`，`checkLogin` 走短超时；登录 / 开门仍用 5s + 15s |
+| 探活兜底 | 新增 `communitiesProbe()`：单次请求、短超时、不串行 4 姿势（原 `communities()` 最坏 (5s+15s)×4） |
+| 颜色 / 工具类 | 主界面色值集中为编译期常量，减少 `Color.parseColor`；新增 `Ui.java` 收敛 `dp()` / `label()` / 线程安全 Toast |
+| 省一次联网 | 已登录但无小区名时先读门列表缓存补齐，无缓存才联网 |
+| 文案 | 旧入口「门列表 ▸」统一为实际存在的「切换门 ▸」 |
+
+### 11-16 本轮补齐的两处遗漏
+1. `SessionGuard.touch()` 的 checkLogin 失败兜底仍在调会串行 4 姿势的 `communities()`，
+   新增的 `communitiesProbe()` 成了死代码 → 改为调用 `communitiesProbe()`，探活总预算才真正收住。
+2. `DoorCache.Data.fresh()`（10 分钟）定义后全程无调用点 → 在 `DoorListActivity.loadDoors()`
+   缓存渲染后加短路：新鲜时直接返回，状态文案提示可点「↻ 刷新门列表」；
+   `allowCache=false`（用户主动刷新）绕过短路强制联网。
+
+### 验证与边界
+- 全量 `javac --release 8 -encoding UTF-8 -cp tools/android.jar`（源码 + `build/gen/R.java`）
+  编译通过，**104 个 class**；补齐两处后重编仍通过。
+- **未运行 build-apk.py、未生成 / 覆盖 APK、未 adb install、未提交、未推送**。
+  以上均为源码级改动，旋转屏、弱网预算、缓存短路的真机行为尚未验证。
+- 本轮未做 P1 剩余项：`AppLog` 导出 / 清空的主线程阻塞、`refreshStats()` 重复读记录文件、
+  两个开门入口的过期态统一（后者涉及行为变更，需单独真机回归）。
+
+### 11-16 第二轮验证：发现并修复两处（均为 11-15/11-16 批次引入）
+1. **真实视觉回归 `C_RETRY_BG` 透明色**：`MainActivity.java` 新增色值常量时，
+   `C_RETRY_BG` 写成 `0xFFF1E9`（6 位），Java 解析为 `0x00FFF1E9`、alpha=0，
+   「凭证已失效？点此重试连接」按钮底色全透明；HEAD 原值为 `Color.parseColor("#FFF1E9")`
+   = `0xFFFFF1E9`。已补为 8 位。全量复检所有 `C_*` 常量均为 8 位 AARRGGBB。
+2. **`Ui.java` 注释失实 / 重构只做了一半**：注释声称「三个 Activity + 小部件共用，
+   四处收敛为一行委托」，但 grep 显示只有 MainActivity 委托，其余仍是本地实现。
+   已把 `DoorListActivity` / `LogActivity` 的 `dp/label/toast`（含 6 处散落 Toast）、
+   `OpenWidget` 的 `toast` 全部委托 `Ui`（语义已逐处核实等价：均为主线程 LENGTH_SHORT、
+   不 cancel 上一条），并清理无用 import。保留一行签名壳，调用点无需改动。
+
+**验证**：全量 `javac --release 8` 编译通过，103 个 class；颜色常量 8 位复检全通过。
+**未打包、未覆盖安装、未提交、未推送**；HEAD 仍 `861aaa1`。
+
+**本轮验证仍存疑（需真机）**：
+- `communitiesProbe()` 只发「记忆姿势」单次请求，若该姿势失效则失去 4 姿势兜底，
+  极端情况下 `expiredAfterRetry()` 可能把网关姿势问题误判为凭证超时（触发前提叠加，风险低）。
+- `fresh()` 短路后，服务端撤销门禁权限最多 10 分钟内本机不刷新，需用户主动点「↻ 刷新门列表」。
+- `LogActivity` 有 `configChanges` 但无 `onConfigurationChanged`（HEAD 既有，非本批次引入），
+  旋转后浮层尺寸不重算；`MainActivity` 的旋转重定位在 `centering=true` 时序下可能偶发跳过。
