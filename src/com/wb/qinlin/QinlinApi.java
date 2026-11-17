@@ -22,9 +22,9 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * 亲邻云端网关协议的独立实现（仅使用 Android / JDK 标准库，无第三方依赖）。
+ * qinlin云端网关协议的独立实现（仅使用 Android / JDK 标准库，无第三方依赖）。
  *
- * 开门指令必须经亲邻服务端实时校验，因此本类必然要联网；
+ * 开门指令必须经qinlin服务端实时校验，因此本类必然要联网；
  * 但不需要任何自建服务器、域名、HTTPS 证书或 Docker。
  */
 public final class QinlinApi {
@@ -381,7 +381,7 @@ public final class QinlinApi {
                     || msg.toLowerCase(Locale.US).contains("token expired");
             if (authenticated && expired) {
                 AppLog.w(AppLog.LOGIN, "服务端判定凭证失效 → SESSION_EXPIRED（需重新短信登录）");
-                throw new ApiException("SESSION_EXPIRED", "亲邻凭证已失效，请重新短信登录");
+                throw new ApiException("SESSION_EXPIRED", "qinlin凭证已失效，请重新短信登录");
             }
             // 121 = 签名或签名头不被接受（缺头 / 时间戳越界 / 签名不匹配）。
             // 单独成码：以前混在 QINLIN_REJECTED 里，和「门离线 / 无权限」的提示一模一样，
@@ -389,11 +389,11 @@ public final class QinlinApi {
             if (code.equals("121")) {
                 AppLog.e(AppLog.NET, "业务拒绝 → SIGN_REJECTED（code 121 = 签名/签名头不被接受）| msg=" + msg);
                 throw new ApiException("SIGN_REJECTED",
-                        "亲邻网关拒绝了请求签名（code 121），多为协议版本头过期；请更新 App 后重试，"
+                        "qinlin网关拒绝了请求签名（code 121），多为协议版本头过期；请更新 App 后重试，"
                                 + "持续出现请把日志发给开发者。上游原因：" + msg);
             }
             AppLog.e(AppLog.NET, "业务拒绝 → QINLIN_REJECTED | msg=" + msg);
-            throw new ApiException("QINLIN_REJECTED", "亲邻未接受请求：" + msg);
+            throw new ApiException("QINLIN_REJECTED", "qinlin未接受请求：" + msg);
         }
         return o.opt("data");
     }
@@ -590,7 +590,7 @@ public final class QinlinApi {
     /** 业务 code != 0 时的原因文本（解析不出就保持旧的兜底文案）。 */
     private static String errorText(JSONObject o) {
         String r = reason(o);
-        return redact(r.length() > 0 ? r : "亲邻未接受请求");
+        return redact(r.length() > 0 ? r : "qinlin未接受请求");
     }
 
     /**

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-亲邻云端网关「接口契约探针」——无凭证、只读、不触发开门、不发送短信。
+qinlin云端网关「接口契约探针」——无凭证、只读、不触发开门、不发送短信。
 
 每个请求只带一个无效的 sessionId 和空 JSON body，网关在鉴权层即拒绝，
 因此不会执行任何业务动作，也不会产生短信费用或风控副作用。
@@ -95,7 +95,7 @@ def classify(http, body):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="亲邻网关接口契约探测")
+    ap = argparse.ArgumentParser(description="qinlin网关接口契约探测")
     ap.add_argument("--all", action="store_true", help="连同备用与 404 对照路径一起探测")
     ap.add_argument("--save-baseline", action="store_true", help="把本次结果保存为新基线")
     args = ap.parse_args()
