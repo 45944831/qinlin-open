@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">亲邻开门</string>
+    <string name="app_name">qinlin</string>
 
     <!-- 四种小部件样式：挑选列表里靠 label 区分，label 里带格子尺寸，用户一眼知道占多大 -->
     <string name="widget_name">快捷开门 · 大卡片 4×2</string>

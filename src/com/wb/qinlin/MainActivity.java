@@ -519,7 +519,7 @@ public class MainActivity extends Activity {
         // ---- 1. 顶部：未登录 = 品牌 + 登录表单；已登录 = 一行账号 + 小区名 + 退出 ----
         brandBox = new LinearLayout(this);
         brandBox.setOrientation(LinearLayout.VERTICAL);
-        brandBox.addView(label("亲邻开门 · 无广告", 21, C_INK, true));
+        brandBox.addView(label("qinlin · 无广告", 21, C_INK, true));
         TextView sub = label("手机本机直连云端网关\n无服务器 / 无域名 / 无广告 SDK",
                 12, C_SUB, false);
         sub.setPadding(0, dp(4), 0, dp(6));

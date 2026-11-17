@@ -1,4 +1,4 @@
-# 亲邻开门 · 无广告 APK
+# qinlin · 无广告 APK
 
 手机本机直连亲邻云端网关的极简开门 App：不启动官方 `com.qinlin.edoor`，广告 SDK 不运行，
 不需要服务器 / 域名 / HTTPS 证书 / Docker，也没有第三方库。

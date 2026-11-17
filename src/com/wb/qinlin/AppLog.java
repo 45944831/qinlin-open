@@ -543,7 +543,7 @@ public final class AppLog {
     }
 
     private static StringBuilder header(Context c) {
-        StringBuilder sb = new StringBuilder("亲邻开门 · 诊断日志\n");
+        StringBuilder sb = new StringBuilder("qinlin · 诊断日志\n");
         sb.append("生成时间 ").append(stamp(System.currentTimeMillis())).append('\n');
         sb.append("脱敏说明：手机号 / sessionId / openid 仅保留长度与指纹，可安全外发。\n\n");
         sb.append(snapshot(c)).append('\n');
