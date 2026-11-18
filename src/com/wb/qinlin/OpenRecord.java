@@ -32,6 +32,14 @@ public final class OpenRecord {
     private static final long KEEP_DAYS = 90L;
 
     private static final Object LOCK = new Object();
+    /**
+     * 进程内记录缓存（LOCK 保护，null = 还没读过盘）。
+     * 主界面 refreshStats() 一次要调 todayCount / last / recent / count 四五个读接口，
+     * 旧实现每次都重新解析整份磁盘文件；文件最多 60 行虽小，但开门完成 → 刷新界面
+     * 的路径上全是主线程，缓存后整段刷新只剩第一次进程读一次盘。
+     * 对外仍返回副本：recent() 要排序、add() 要追加，调用方随便改，不影响缓存。
+     */
+    private static List<Item> memCache;
 
     private OpenRecord() {}
 
@@ -79,7 +87,9 @@ public final class OpenRecord {
             try {
                 List<Item> items = load(c);
                 items.add(new Item(System.currentTimeMillis(), ok, ms, door, note, from));
-                save(c, trim(items));
+                List<Item> trimmed = trim(items);
+                save(c, trimmed);
+                memCache = trimmed;   // 落盘成功才更新缓存；save 失败时仅记录漂移，跨进程自然纠正
             } catch (Throwable t) {
                 AppLog.w(AppLog.OPEN, "本机开门记录写入失败（不影响开门）："
                         + t.getClass().getSimpleName());

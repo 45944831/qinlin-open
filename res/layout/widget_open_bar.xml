@@ -32,6 +32,16 @@
         android:orientation="vertical">
 
         <TextView
+            android:id="@+id/w_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="开门 · 4×1 横条"
+            android:textColor="#8A94A6"
+            android:textSize="9sp" />
+
+        <TextView
             android:id="@+id/w_door"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

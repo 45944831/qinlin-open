@@ -10,8 +10,10 @@ import android.util.TypedValue;
 import android.widget.RemoteViews;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -58,10 +60,78 @@ public class OpenWidget extends AppWidgetProvider {
     static final int STYLE_BAR = 3;
 
     /**
+     * 主题色：索引与 res/drawable 的 widget_*_cN 一一对应。
+     * 用 getIdentifier 按名取资源，避免写死 R.drawable 常量（新增配色不用改 Java）。
+     */
+    static final String[] COLORS = {"经典红", "海蓝", "松绿", "紫罗兰", "暖橙", "青碧"};
+    private static final String BG_RES = "widget_bg_c";
+    private static final String BTN_RES = "widget_btn_c";
+    private static final String PILL_RES = "widget_pill_c";
+    private static final String SQ_RES = "widget_sq_c";
+
+    /** 版式的中文尺寸名，设置界面 Tab 展示用。 */
+    static String sizeLabel(int style) {
+        switch (style) {
+            case STYLE_SQUARE: return "1×1 按钮";
+            case STYLE_MINI: return "2×1 长条";
+            case STYLE_BAR: return "4×1 横条";
+            default: return "4×2 大卡片";
+        }
+    }
+
+    /** 默认组件名：未自定义时按版式给一个稳定名字。 */
+    static String defaultName(int style) { return "开门 · " + sizeLabel(style); }
+
+    /** 桌面上一个真实小组件实例（设置界面列出用）。 */
+    static final class Installed {
+        public final int id;
+        public final int style;
+        Installed(int id, int style) { this.id = id; this.style = style; }
+        String size() { return sizeLabel(style); }
+        String name(Context c) {
+            String n = Prefs.widgetName(id, c);
+            return n.length() > 0 ? n : defaultName(style);
+        }
+    }
+
+    /** 枚举桌面上已放置的全部小组件实例（四种 provider 都查一遍）。 */
+    static List<Installed> listInstalled(Context c) {
+        List<Installed> out = new ArrayList<Installed>();
+        AppWidgetManager mgr = AppWidgetManager.getInstance(c);
+        addInstalled(c, mgr, OpenWidget.class, STYLE_CARD, out);
+        addInstalled(c, mgr, OpenWidgetBar.class, STYLE_BAR, out);
+        addInstalled(c, mgr, OpenWidgetMini.class, STYLE_MINI, out);
+        addInstalled(c, mgr, OpenWidgetSquare.class, STYLE_SQUARE, out);
+        return out;
+    }
+
+    private static void addInstalled(Context c, AppWidgetManager mgr, Class<?> cls,
+                                     int style, List<Installed> out) {
+        try {
+            int[] ids = mgr.getAppWidgetIds(new ComponentName(c, cls));
+            if (ids == null) return;
+            for (int id : ids) out.add(new Installed(id, style));
+        } catch (Throwable t) {
+            AppLog.w(AppLog.UI, "枚举小组件失败(" + cls.getSimpleName() + ")：" + t);
+        }
+    }
+
+    /** 安全取 drawable 资源 id：主题色索引越界时回退到 0（默认红）。 */
+    private static int colorRes(Context c, String prefix, int colorIdx) {
+        int idx = colorIdx;
+        if (idx < 0 || idx >= COLORS.length) idx = 0;
+        int id = c.getResources().getIdentifier(prefix + idx, "drawable", c.getPackageName());
+        return id != 0 ? id : 0;
+    }
+
+    /**
      * 正在开门的时间戳。只用于「同一进程内防连点」：
      * 桌面上按钮大、拇指容易重复落点，连点会下发多条开门指令。
      */
     private static volatile long inFlight = 0L;
+
+    /** 正在开门的组件 id：只让被点的那个显示「开门中」，其它组件保持正常外观。 */
+    private static volatile int busyWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
 
     /** 子类覆盖：自己属于哪种版式。 */
     protected int style() {
@@ -126,6 +196,7 @@ public class OpenWidget extends AppWidgetProvider {
     static void noteResult(Context c, boolean ok, String text, int costMs, String from,
                            String doorNameOverride) {
         inFlight = 0L;
+        busyWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
         if (ok) {
             try {
                 String doorName = (doorNameOverride != null && doorNameOverride.length() > 0)
@@ -154,9 +225,10 @@ public class OpenWidget extends AppWidgetProvider {
         return shortName(name);
     }
 
-    /** 请求已发出、结果未回：先把按钮切成「开门中…」，点完立刻有反馈。 */
-    static void markBusy(Context context) {
+    /** 请求已发出、结果未回：只把被点的那个按钮切成「开门中…」，其它组件不受影响。 */
+    static void markBusy(Context context, int appWidgetId) {
         inFlight = System.currentTimeMillis();
+        busyWidgetId = appWidgetId;
         updateAll(context.getApplicationContext(), MODE_BUSY);
     }
 
@@ -203,7 +275,7 @@ public class OpenWidget extends AppWidgetProvider {
 
     /** 带 appWidgetId 的构建：读取该 widget 绑定的门（未绑定回退全局默认门）。 */
     static RemoteViews build(Context c, int mode, int style, int appWidgetId) {
-        State s = readState(c, mode, appWidgetId);
+        State s = readState(c, mode, style, appWidgetId);
         switch (style) {
             case STYLE_SQUARE:
                 return buildSquare(c, s);
@@ -226,6 +298,8 @@ public class OpenWidget extends AppWidgetProvider {
         String meta = "";
         String state = "";
         int stateColor = 0xFF5A6B85;
+        int colorIdx = 0;      // 主题色索引
+        String label = "";     // 组件自定义名（含默认名回退）
     }
 
     /** 某个 widget 实际要控制的门：优先用绑定门，未绑定回退全局默认门。 */
@@ -264,9 +338,12 @@ public class OpenWidget extends AppWidgetProvider {
         return b;
     }
 
-    private static State readState(Context c, int mode, int appWidgetId) {
+    private static State readState(Context c, int mode, int style, int appWidgetId) {
         State s = new State();
         s.appWidgetId = appWidgetId;
+        s.colorIdx = Prefs.widgetColor(appWidgetId, c);
+        String custom = Prefs.widgetName(appWidgetId, c);
+        s.label = custom.length() > 0 ? custom : defaultName(style);
         BoundDoor b = boundDoor(c, appWidgetId);
         final int cid = b.cid;
         final int did = b.did;
@@ -275,7 +352,8 @@ public class OpenWidget extends AppWidgetProvider {
 
         s.logged = Prefs.loggedIn(c);
         s.ready = s.logged && cid > 0 && did > 0;
-        s.busy = mode == MODE_BUSY;
+        // 只有被点击的那个组件显示开门中；其余组件即使被 updateAll 重绘也保持正常外观
+        s.busy = mode == MODE_BUSY && appWidgetId == busyWidgetId;
 
         if (s.ready) {
             s.door = doorName.length() > 0 ? shortName(doorName) : ("门 #" + did);
@@ -313,13 +391,19 @@ public class OpenWidget extends AppWidgetProvider {
     private static RemoteViews buildCard(Context c, State s) {
         RemoteViews rv = new RemoteViews(c.getPackageName(), R.layout.widget_open);
 
+        // 主题色：卡片底 + 主按钮（就绪态）。未就绪/开门中保持原来的蓝/灰语义色。
+        int bg = colorRes(c, BG_RES, s.colorIdx);
+        int btn = colorRes(c, BTN_RES, s.colorIdx);
+        if (bg != 0) rv.setInt(R.id.w_root, "setBackgroundResource", bg);
+        rv.setTextViewText(R.id.w_label, s.label);
+
         rv.setTextViewText(R.id.w_door, s.door);
         rv.setTextViewText(R.id.w_meta, s.meta);
         rv.setTextColor(R.id.w_door, s.ready ? 0xFF16233B : 0xFF5A6B85);
         rv.setTextColor(R.id.w_meta, s.ready ? 0xFF8A94A6 : 0xFF2563EB);
         rv.setTextColor(R.id.w_dot, s.ready ? 0xFF137333 : 0xFF9AA7BC);
 
-        applyButton(rv, s, R.drawable.widget_btn_red, R.drawable.widget_btn_busy,
+        applyButton(rv, s, btn, R.drawable.widget_btn_busy,
                 R.drawable.widget_btn_blue, "开 门", "开门中…", "打开应用");
 
         rv.setTextViewText(R.id.w_state, s.state);
@@ -331,23 +415,42 @@ public class OpenWidget extends AppWidgetProvider {
         rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? piOpen : piConfig);
         rv.setOnClickPendingIntent(R.id.w_header, piConfig);   // 点门名=给这个 widget 换门
         rv.setOnClickPendingIntent(R.id.w_state, piConfig);
+        rv.setOnClickPendingIntent(R.id.w_label, settingsIntent(c, s.appWidgetId)); // 点组件名=进设置
         return rv;
     }
 
-    /** 1×1：整格一个按钮，没有第二块文字的空间。 */
+    /** 1×1 组件名按码点递减字号：1×1 只有约 40dp 宽，名字越长字越小，保证 5 个汉字也能整格放下。 */
+    private static float squareNameSp(String name) {
+        int n = name.codePointCount(0, name.length());
+        if (n <= 1) return 15f;
+        if (n == 2) return 13f;
+        if (n == 3) return 11.5f;
+        if (n == 4) return 10f;
+        return 8f; // 5 个汉字 ×8sp≈40dp，正好占满 1×1 格子
+    }
+
+    /** 1×1：整格一个按钮。设了组件名就显示名字（字多自动缩小），否则显示「开门」动作词。 */
     private static RemoteViews buildSquare(Context c, State s) {
         RemoteViews rv = new RemoteViews(c.getPackageName(), R.layout.widget_open_square);
+        int sq = colorRes(c, SQ_RES, s.colorIdx);
 
         if (s.busy) {
+            // 开门中保留状态反馈，不显示名字
             rv.setTextViewText(R.id.w_btn, "开门中");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 12f);
             rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_sq_busy);
         } else if (s.ready) {
-            rv.setTextViewText(R.id.w_btn, "开门");
-            rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 13f);
-            rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_sq_red);
+            String custom = Prefs.widgetName(s.appWidgetId, c);
+            if (custom.length() > 0) {
+                rv.setTextViewText(R.id.w_btn, custom);
+                rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, squareNameSp(custom));
+            } else {
+                rv.setTextViewText(R.id.w_btn, "开门");
+                rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 13f);
+            }
+            rv.setInt(R.id.w_btn, "setBackgroundResource", sq != 0 ? sq : R.drawable.widget_sq_red);
         } else {
-            // 1×1 只有 40dp 宽，三个字（去选门）会溢出格子，收成两个字的动作词
+            // 未就绪时是引导操作（登录/选门），优先于名字；三个字会溢出，收成两个字
             rv.setTextViewText(R.id.w_btn, s.logged ? "选门" : "登录");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 12.5f);
             rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_sq_blue);
@@ -359,6 +462,7 @@ public class OpenWidget extends AppWidgetProvider {
     /** 2×1：整条一个按钮（这个宽度放不下门名，索性把面积全给按钮）。 */
     private static RemoteViews buildMini(Context c, State s) {
         RemoteViews rv = new RemoteViews(c.getPackageName(), R.layout.widget_open_mini);
+        int pill = colorRes(c, PILL_RES, s.colorIdx);
         if (s.busy) {
             rv.setTextViewText(R.id.w_btn, "开门中…");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 13f);
@@ -366,7 +470,7 @@ public class OpenWidget extends AppWidgetProvider {
         } else if (s.ready) {
             rv.setTextViewText(R.id.w_btn, "开 门");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 14f);
-            rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_pill_red);
+            rv.setInt(R.id.w_btn, "setBackgroundResource", pill != 0 ? pill : R.drawable.widget_pill_red);
         } else {
             rv.setTextViewText(R.id.w_btn, s.logged ? "去选门" : "去登录");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 12.5f);
@@ -376,9 +480,14 @@ public class OpenWidget extends AppWidgetProvider {
         return rv;
     }
 
-    /** 4×1：左边门名 + 上次结果（两行），右边胶囊按钮。 */
+    /** 4×1：组件名 + 门名 + 上次结果，右边胶囊按钮。 */
     private static RemoteViews buildBar(Context c, State s) {
         RemoteViews rv = new RemoteViews(c.getPackageName(), R.layout.widget_open_bar);
+
+        int bg = colorRes(c, BG_RES, s.colorIdx);
+        int pill = colorRes(c, PILL_RES, s.colorIdx);
+        if (bg != 0) rv.setInt(R.id.w_root, "setBackgroundResource", bg);
+        rv.setTextViewText(R.id.w_label, s.label);
 
         rv.setTextViewText(R.id.w_door, s.door);
         rv.setTextColor(R.id.w_door, s.ready ? 0xFF16233B : 0xFF5A6B85);
@@ -386,11 +495,12 @@ public class OpenWidget extends AppWidgetProvider {
         rv.setTextViewText(R.id.w_meta, shortState(s));
         rv.setTextColor(R.id.w_meta, s.stateColor);
 
-        applyPill(rv, s, "开 门", "开门中…");
+        applyPill(rv, s, pill != 0 ? pill : R.drawable.widget_pill_red, "开 门", "开门中…");
         PendingIntent piConfig = configIntent(c, s.appWidgetId);
         rv.setOnClickPendingIntent(R.id.w_btn, s.ready && !s.busy ? openIntent(c, s.appWidgetId) : piConfig);
         rv.setOnClickPendingIntent(R.id.w_header, piConfig);   // 点门名=给这个 widget 换门
         rv.setOnClickPendingIntent(R.id.w_meta, piConfig);
+        rv.setOnClickPendingIntent(R.id.w_label, settingsIntent(c, s.appWidgetId)); // 点组件名=进设置
         return rv;
     }
 
@@ -410,7 +520,8 @@ public class OpenWidget extends AppWidgetProvider {
     }
 
     /** 横条 / 迷你版的胶囊按钮：字更小，未就绪时收成「去登录 / 去选门」。 */
-    private static void applyPill(RemoteViews rv, State s, String openText, String busyText) {
+    private static void applyPill(RemoteViews rv, State s, int pillRes,
+                                  String openText, String busyText) {
         if (s.busy) {
             rv.setTextViewText(R.id.w_btn, busyText);
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 11.5f);
@@ -418,7 +529,7 @@ public class OpenWidget extends AppWidgetProvider {
         } else if (s.ready) {
             rv.setTextViewText(R.id.w_btn, openText);
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 13f);
-            rv.setInt(R.id.w_btn, "setBackgroundResource", R.drawable.widget_pill_red);
+            rv.setInt(R.id.w_btn, "setBackgroundResource", pillRes);
         } else {
             rv.setTextViewText(R.id.w_btn, s.logged ? "去选门" : "去登录");
             rv.setTextViewTextSize(R.id.w_btn, TypedValue.COMPLEX_UNIT_SP, 11.5f);
@@ -456,6 +567,16 @@ public class OpenWidget extends AppWidgetProvider {
                 new Intent(c, DoorListActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         .putExtra(DoorListActivity.EXTRA_WIDGET_ID, appWidgetId),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** 点组件名：打开小组件设置界面，并自动定位到这个 widget 的标签。 */
+    private static PendingIntent settingsIntent(Context c, int appWidgetId) {
+        int req = REQ_CONFIG + 100000 + Math.max(0, appWidgetId);
+        return PendingIntent.getActivity(c, req,
+                new Intent(c, WidgetConfigActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(WidgetConfigActivity.EXTRA_FOCUS_ID, appWidgetId),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 

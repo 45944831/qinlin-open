@@ -1520,3 +1520,74 @@ v2+v3 签名通过；真机（示例设备 / 示例序列号）覆盖安装后�
 ③ 门列表状态区出现授权到期提示（缓存路径与联网路径都显示）；④ 开门主链路与耗时无变化（0.2–0.3s）。
 
 **未提交、未推送**；HEAD 仍 `1cebe82`，本轮改动留在工作区。
+
+---
+
+## 2026-11-18 · 小组件设置浮层（组件名 / 主题色 / 绑定门）
+
+**需求**：主界面增加小组件设置，显示当前组件名及大小；可设置组件名、组件颜色、
+可选中可开的门；多个组件时以顶部横排标签形式展示。用户确认颜色要真正改变桌面外观
+（作用于按钮与卡片底色），标签用顶部横排 Tab。
+
+**新增 `WidgetConfigActivity`**（悬浮卡片，宽 94%/高 82%，复用 `FloatingDoorList` 主题）：
+- `OpenWidget.listInstalled()` 枚举桌面上所有已放置的小组件实例（`AppWidgetManager.getAppWidgetIds`），
+  顶部 `HorizontalScrollView` 横排标签逐个显示「组件名 + 尺寸（1×1/2×1/4×1/4×2）」，点标签切换编辑对象；
+  从桌面卡片组件名进入时带 `EXTRA_FOCUS_ID` 自动定位到对应标签。
+- 编辑区三块：① 改名（存 `Prefs.widgetName`）；② 主题色 6 个圆点（存 `Prefs.widgetColor`）；
+  ③ 控制哪扇门——显示当前绑定门名，「请选择需要控制的门」进 `DoorListActivity` 配置模式
+  （带 `EXTRA_WIDGET_ID`），「恢复跟随默认门」清空绑定。
+- 每次改动后 `OpenWidget.refreshAll()` 立即刷新桌面，全程只写本机 `SharedPreferences`，**不触发网络请求**。
+- 桌面上无组件时显示添加指引（长按桌面空白处 → 小部件 → qinlin 快捷开门）。
+
+**配色落地**：新增 6 套主题色共 24 个 drawable（`widget_btn_cN` / `pill_cN` / `sq_cN` / `bg_cN`），
+`OpenWidget.State` 增加 `name` / `color` 字段，四种版式按主题色选对应 drawable，
+按钮与卡片底色一起变；`res/layout/widget_open.xml`、`widget_open_bar.xml` 增加 `w_label` 组件名行，
+点击它进入设置界面并定位。`Prefs` 按 `appWidgetId` 存 `wn_<id>`（名）/ `wc_<id>`（色），
+`clearWidgetDoor()` 一并清理。**与 P4 一致：每个组件独立配置，互不影响。**
+
+**入口**：`MainActivity` 门卡底部「组件设置 ▸」→ `startActivityForResult(REQ_WIDGET_CFG)`，
+返回后 `onResume` 刷新桌面；Manifest 注册 `.WidgetConfigActivity`。
+
+**编译验证（本轮）**：aapt2 重新编译资源成功（含 24 个新 drawable 与 `w_label`，R.java 均生成对应 ID）；
+`javac --release 8` 全量编译 119 个 class 通过；`d8` 生成 classes.dex（167,640 字节）成功。
+本轮按用户长期规则**只做编译验证，未打包、未覆盖安装、未提交/推送**；真机验证待用户明确授权打包后进行。
+
+### 2026-11-18 补充：组件名限制 5 个字
+- 需求：小组件名字限制字符，5 个汉字。
+- **存储层**：`Prefs.WIDGET_NAME_MAX=5`，新增 `limitWidgetName()` 按 Unicode **码点**截断
+  （1 汉字=1 码点，emoji 代理对也算 1 个且不会被截成半截）；`setWidgetName` 写入前截断，
+  `widgetName` 读取时也截断以兼容旧版本写入的超长名字。
+- **输入层**：`WidgetConfigActivity` 加 `NAME_FILTER`（InputFilter），输入时就拦截超长内容，
+  提示文案改为「最多 5 个字」。两层一致，避免绕过 UI 写入超长名。
+- **验证**：aapt2 + javac（120 class，多 1 个为 NAME_FILTER 匿名类）+ d8（168,580 字节）全通过；
+  另用独立用例验证截断：5 汉字/5 字母/emoji 计 1 个/超长按码点截/emoji 不截半/null 安全共 6 例全 PASS。
+  仍未打包、未安装、未提交。
+
+### 2026-11-18 补充：1×1 显示组件名并按字数缩字号
+- 需求：小组件 1×1 时若有 5 个汉字，可以缩小字体。
+- 现状：1×1（`widget_open_square`）整格只有 `w_btn`，原硬编码「开门」，完全没用组件名。
+- 改法：`buildSquare` 在 ready 且设了名字时，按钮显示组件名并按码点递减字号，新增
+  `squareNameSp()`：1 字 15sp / 2 字 13sp / 3 字 11.5sp / 4 字 10sp / 5 字 8sp
+  （5×8sp≈40dp 正好占满 1×1 格子，避免布局 `ellipsize=end` 吞字）；未设名字仍显示「开门」，
+  busy 显示「开门中」保留状态反馈，未就绪显示「选门/登录」引导（均优先于名字）。
+- 验证：aapt2 + javac（120 class）+ d8（168,780 字节）全通过。仍未打包、未安装、未提交。
+
+### 2026-11-18 补充：设置浮层颜色区「颜色与名字没对齐」
+- 现象：用户真机验证反馈，设置浮层 6 个主题色圆点与下方颜色名（经典红/海蓝…）没对齐。
+- 根因：`makeSwatch` 每个色块用 `wrap_content` + 仅右侧 10dp padding，色块宽度随名称字数变化
+  （「经典红」3 字 vs「海蓝」2 字），且左右 padding 不对称；窄屏时 6 格总宽超出容器还会被裁切。
+- 改法：6 个色块改为 `weight=1` **等分父容器宽度**，去掉不对称 padding；圆点 34dp 用
+  `Gravity.CENTER_HORIZONTAL` 居中，颜色名 `MATCH_PARENT` + `setGravity(CENTER)` 居中，
+  两者严格同轴；不受名称长短影响、窄屏不溢出。
+- 验证：aapt2 + javac（120 class）+ d8（168,808 字节）全通过。仍未打包、未安装、未提交。
+
+### 2026-11-18 补充：多组件点一个其它也变「开门中」
+- 现象：用户真机反馈，多个小组件点击其中一个时，其它组件也一起触发被点击效果（变「开门中」）。
+- 根因：`markBusy()` 设全局 `inFlight` 后 `updateAll(MODE_BUSY)` 重绘全部组件，而
+  `readState()` 里 `s.busy = mode == MODE_BUSY` 对所有组件都为 true。（三个 PendingIntent 的
+  requestCode 已按 widgetId 区分，不是 Intent 复用问题。）
+- 改法：新增 `volatile int busyWidgetId`，`markBusy(c, appWidgetId)` 记录被点组件；
+  `s.busy = mode == MODE_BUSY && appWidgetId == busyWidgetId`，只让被点的那个显示「开门中」；
+  `noteResult()` 复位为 INVALID。`updateAll` 仍需重绘全部（清掉旧 busy + 写结果），但只有目标组件 busy。
+  `inFlight()` 全局防连点保持不变（同一时刻只允许一个开门请求）。
+- 验证：aapt2 + javac（120 class）+ d8（168,848 字节）全通过。仍未打包、未安装、未提交。

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
@@ -44,6 +45,28 @@ public class LogActivity extends Activity {
     /** 一次最多渲染多少条：再多就用「导出」看全量，避免一次排版过重。 */
     private static final int MAX_LINES = 300;
     private static final int REQ_EXPORT = 2001;
+
+    /** 弹窗配色：编译期常量，不再逐处 Color.parseColor。 */
+    private static final int C_INK = 0xFF16233B;        // 标题深墨
+    private static final int C_NAVY = 0xFF1B3A6B;       // 按钮文字深蓝
+    private static final int C_STEEL = 0xFF6B7688;      // 「✕ 关闭」灰字
+    private static final int C_MUTED = 0xFF8A94A6;      // 提示 / 页脚灰
+    private static final int C_LOG_TEXT = 0xFF22304B;   // 日志正文
+    private static final int C_BG = 0xFFF5F7FB;         // 弹窗卡片底
+    private static final int C_BLUE_SOFT = 0xFFE3EAF6;  // 浅蓝按钮底
+    private static final int C_FILTER_BG = 0xFFDCE7FA;  // 「筛选」按钮底
+    private static final int C_DIAG_BG = 0xFFE8F1FF;    // 「诊断快照」按钮底
+    private static final int C_DANGER_BG = 0xFFF3E8E7;  // 「清空日志」按钮底
+    private static final int C_FAIL = 0xFFB3261E;       // 「清空日志」文字 / 失败红
+    private static final int C_STROKE = 0xFFC9D6EA;     // 常规浅描边
+    private static final int C_STATUS_BG = 0xFFE9EEF7;  // 日志框底
+    private static final int C_STATUS_EDGE = 0xFF9DB4DC;// 日志框描边
+    private static final int C_BLUE = 0xFF2563EB;       // 「回到最新」胶囊底
+    private static final int C_BLUE_EDGE = 0xFF1B4FBF;  // 胶囊描边
+    // 日志级别着色（渲染时按 Entry.level 取）
+    private static final int C_LV_ERR = 0xFFC5221F;
+    private static final int C_LV_WARN = 0xFFB06000;
+    private static final int C_LV_OK = 0xFF137333;
 
     private int filterIdx;
     private Button filterBtn;
@@ -128,18 +151,18 @@ public class LogActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(14), dp(16), dp(14));
         GradientDrawable card = new GradientDrawable();
-        card.setColor(Color.parseColor("#F5F7FB"));
+        card.setColor(C_BG);
         card.setCornerRadius(dp(16));
-        card.setStroke(dp(1), Color.parseColor("#C9D6EA"));
+        card.setStroke(dp(1), C_STROKE);
         root.setBackground(card);
 
         // ---- 标题行：标题 + 关闭 ----
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(label("分类日志", 18, Color.parseColor("#16233B"), true),
+        head.addView(label("分类日志", 18, C_INK, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView closeTv = label("✕ 关闭", 14, Color.parseColor("#6B7688"), true);
+        TextView closeTv = label("✕ 关闭", 14, C_STEEL, true);
         closeTv.setPadding(dp(12), dp(8), dp(2), dp(8));
         closeTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { finish(); }
@@ -148,19 +171,19 @@ public class LogActivity extends Activity {
         root.addView(head);
 
         TextView hint = label("上下滑动查看历史 · 新日志自动跟到最新 · 手机号与凭证已脱敏",
-                12, Color.parseColor("#8A94A6"), false);
+                12, C_MUTED, false);
         hint.setPadding(0, dp(2), 0, dp(8));
         root.addView(hint);
 
         // ---- 工具条 ----
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
-        filterBtn = smallButton("筛选：全部 ▸", Color.parseColor("#DCE7FA"),
-                Color.parseColor("#1B3A6B"));
-        Button copyBtn = smallButton("复制全部", Color.parseColor("#E3EAF6"),
-                Color.parseColor("#1B3A6B"));
-        Button exportBtn = smallButton("导出文件", Color.parseColor("#E3EAF6"),
-                Color.parseColor("#1B3A6B"));
+        filterBtn = smallButton("筛选：全部 ▸", C_FILTER_BG,
+                C_NAVY);
+        Button copyBtn = smallButton("复制全部", C_BLUE_SOFT,
+                C_NAVY);
+        Button exportBtn = smallButton("导出文件", C_BLUE_SOFT,
+                C_NAVY);
         tools.addView(filterBtn);
         tools.addView(copyBtn);
         tools.addView(exportBtn);
@@ -169,10 +192,10 @@ public class LogActivity extends Activity {
         // 第二行：排障用的两个重操作，放在弹窗里做，主界面不再摆这些按钮
         LinearLayout tools2 = new LinearLayout(this);
         tools2.setOrientation(LinearLayout.HORIZONTAL);
-        Button diagBtn = smallButton("诊断快照", Color.parseColor("#E8F1FF"),
-                Color.parseColor("#1B3A6B"));
-        Button clearBtn = smallButton("清空日志", Color.parseColor("#F3E8E7"),
-                Color.parseColor("#B3261E"));
+        Button diagBtn = smallButton("诊断快照", C_DIAG_BG,
+                C_NAVY);
+        Button clearBtn = smallButton("清空日志", C_DANGER_BG,
+                C_FAIL);
         tools2.addView(diagBtn);
         tools2.addView(clearBtn);
         root.addView(tools2);
@@ -187,8 +210,9 @@ public class LogActivity extends Activity {
         });
         copyBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                // 导出的整份文本（含头部快照），比只复制当前筛选更实用
-                copyText(AppLog.exportText(LogActivity.this), "全部日志已复制");
+                // 导出的整份文本（含头部快照），比只复制当前筛选更实用；
+                // 全文要读 512KB 级磁盘日志 → 后台生成，主线程只写剪贴板
+                copyAllLogsAsync();
             }
         });
         exportBtn.setOnClickListener(new View.OnClickListener() {
@@ -232,7 +256,7 @@ public class LogActivity extends Activity {
         logScroll.setBackground(makeLogBox());
         logScroll.setPadding(dp(2), dp(4), dp(2), dp(4));
 
-        logTv = label("", 12, Color.parseColor("#22304B"), false);
+        logTv = label("", 12, C_LOG_TEXT, false);
         logTv.setPadding(dp(12), dp(8), dp(12), dp(8));
         logTv.setLineSpacing(dp(2), 1f);
         logScroll.addView(logTv, new FrameLayout.LayoutParams(
@@ -244,9 +268,9 @@ public class LogActivity extends Activity {
         newBtn = label("↓ 回到最新", 12, Color.WHITE, true);
         newBtn.setPadding(dp(12), dp(7), dp(12), dp(7));
         GradientDrawable nb = new GradientDrawable();
-        nb.setColor(Color.parseColor("#2563EB"));
+        nb.setColor(C_BLUE);
         nb.setCornerRadius(dp(15));
-        nb.setStroke(dp(1), Color.parseColor("#1B4FBF"));
+        nb.setStroke(dp(1), C_BLUE_EDGE);
         newBtn.setBackground(nb);
         newBtn.setElevation(dp(6));
         newBtn.setVisibility(View.GONE);
@@ -264,7 +288,7 @@ public class LogActivity extends Activity {
         wrapLp.topMargin = dp(10);
         root.addView(wrap, wrapLp);
 
-        footTv = label("", 11, Color.parseColor("#8A94A6"), false);
+        footTv = label("", 11, C_MUTED, false);
         footTv.setPadding(0, dp(8), 0, 0);
         root.addView(footTv);
 
@@ -304,6 +328,26 @@ public class LogActivity extends Activity {
         }
     }
 
+    /**
+     * 「复制全部」：exportText() 要同步读轮转 + 当前两份日志文件（最大各 256KB），
+     * 不能在主线程做——后台拼好全文，再回主线程写剪贴板。
+     */
+    private void copyAllLogsAsync() {
+        final Context app = getApplicationContext();
+        Ui.toast(this, "正在整理全部日志…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final String text = AppLog.exportText(app);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing() || isDestroyed()) return;
+                        copyText(text, "全部日志已复制");
+                    }
+                });
+            }
+        }, "log-export-copy").start();
+    }
+
     /** 用系统文件选择器导出 txt（SAF，不需要任何权限或第三方库）。 */
     private void exportLog() {
         try {
@@ -326,19 +370,28 @@ public class LogActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_EXPORT) return;
         if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-            OutputStream os = null;
-            try {
-                os = getContentResolver().openOutputStream(data.getData());
-                os.write(AppLog.exportText(this).getBytes("UTF-8"));
-                os.flush();
-                AppLog.ok(AppLog.SYS, "日志已导出到所选位置");
-                Ui.toast(this, "日志已导出");
-            } catch (Exception e) {
-                AppLog.e(AppLog.ERR, "日志导出失败 " + AppLog.stack(e));
-                Ui.toast(this, "导出失败：" + e.getMessage());
-            } finally {
-                if (os != null) try { os.close(); } catch (Exception ignored) {}
-            }
+            // exportText（读 512KB 级日志）+ SAF 写流都是磁盘 IO：全部移到后台线程，
+            // 主线程只负责选完目标文件后立刻提示「正在导出」。
+            final android.net.Uri target = data.getData();
+            final Context app = getApplicationContext();
+            Ui.toast(this, "正在导出日志…");
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    OutputStream os = null;
+                    try {
+                        os = app.getContentResolver().openOutputStream(target);
+                        os.write(AppLog.exportText(app).getBytes("UTF-8"));
+                        os.flush();
+                        AppLog.ok(AppLog.SYS, "日志已导出到所选位置");
+                        Ui.toast(app, "日志已导出");
+                    } catch (Exception e) {
+                        AppLog.e(AppLog.ERR, "日志导出失败 " + AppLog.stack(e));
+                        Ui.toast(app, "导出失败：" + e.getMessage());
+                    } finally {
+                        if (os != null) try { os.close(); } catch (Exception ignored) {}
+                    }
+                }
+            }, "log-export-write").start();
         } else {
             AppLog.w(AppLog.UI, "日志导出已取消");
         }
@@ -346,9 +399,9 @@ public class LogActivity extends Activity {
 
     private GradientDrawable makeLogBox() {
         GradientDrawable box = new GradientDrawable();
-        box.setColor(Color.parseColor("#E9EEF7"));
+        box.setColor(C_STATUS_BG);
         box.setCornerRadius(dp(10));
-        box.setStroke(dp(1), Color.parseColor("#9DB4DC"));
+        box.setStroke(dp(1), C_STATUS_EDGE);
         return box;
     }
 
@@ -360,10 +413,10 @@ public class LogActivity extends Activity {
         String tag = ("全部".equals(f) || errOnly) ? null : f;
         List<AppLog.Entry> list = AppLog.recent(tag, errOnly, MAX_LINES);
 
-        final int cErr = Color.parseColor("#C5221F");
-        final int cWarn = Color.parseColor("#B06000");
-        final int cOk = Color.parseColor("#137333");
-        final int cInfo = Color.parseColor("#22304B");
+        final int cErr = C_LV_ERR;
+        final int cWarn = C_LV_WARN;
+        final int cOk = C_LV_OK;
+        final int cInfo = C_LOG_TEXT;
         SpannableStringBuilder sb = new SpannableStringBuilder();
         for (int i = 0; i < list.size(); i++) {
             AppLog.Entry e = list.get(i);

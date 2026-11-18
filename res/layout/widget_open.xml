@@ -17,6 +17,17 @@
     android:paddingRight="12dp"
     android:paddingBottom="8dp">
 
+    <!-- 组件名行：设置界面里可改名，多组件时用来区分（如「家门」「车库」）。未自定义时显示默认名 -->
+    <TextView
+        android:id="@+id/w_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="开门 · 4×2 大卡片"
+        android:textColor="#8A94A6"
+        android:textSize="10sp" />
+
     <!-- 第一行：状态点 + 门名 + 区域。整行点了打开 App（不是开门） -->
     <LinearLayout
         android:id="@+id/w_header"

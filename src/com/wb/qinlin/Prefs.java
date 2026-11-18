@@ -244,9 +244,48 @@ public final class Prefs {
         ed.apply();
     }
 
-    /** 删除某 widget 的绑定（小组件从桌面移除时调用）。 */
+    /**
+     * 小组件自定义显示名（设置界面里改）。空串=未设置，界面回退到按样式生成的默认名。
+     * 只是界面标签，不含凭证，普通 SharedPreferences 即可。
+     */
+    private static String widgetNameKey(int appWidgetId) { return "wn_" + appWidgetId; }
+
+    /** 组件名最长 5 个字符（按 Unicode 码点计，1 个汉字=1 个字符，emoji 也算 1 个）。 */
+    public static final int WIDGET_NAME_MAX = 5;
+
+    /** 按码点截断到 5 个字符，防止超长名字挤爆桌面卡片。emoji 代理对不会被截成半截。 */
+    public static String limitWidgetName(String v) {
+        if (v == null) return "";
+        int n = v.codePointCount(0, v.length());
+        if (n <= WIDGET_NAME_MAX) return v;
+        return v.substring(0, v.offsetByCodePoints(0, WIDGET_NAME_MAX));
+    }
+
+    public static String widgetName(int appWidgetId, Context c) {
+        // 读取也截断，兼容旧版本写入的超长名字
+        return limitWidgetName(sp(c).getString(widgetNameKey(appWidgetId), ""));
+    }
+
+    public static void setWidgetName(int appWidgetId, Context c, String v) {
+        sp(c).edit().putString(widgetNameKey(appWidgetId), limitWidgetName(v)).apply();
+    }
+
+    /** 小组件主题色索引（0~5 对应 res/drawable 的 widget_*_cN）。未设置为 0=默认红。 */
+    private static String widgetColorKey(int appWidgetId) { return "wc_" + appWidgetId; }
+
+    public static int widgetColor(int appWidgetId, Context c) {
+        return sp(c).getInt(widgetColorKey(appWidgetId), 0);
+    }
+
+    public static void setWidgetColor(int appWidgetId, Context c, int idx) {
+        sp(c).edit().putInt(widgetColorKey(appWidgetId), idx).apply();
+    }
+
+    /** 删除某 widget 的全部配置（小组件从桌面移除时调用）。 */
     public static void clearWidgetDoor(int appWidgetId, Context c) {
-        sp(c).edit().remove(widgetDoorKey(appWidgetId)).apply();
+        sp(c).edit().remove(widgetDoorKey(appWidgetId))
+                .remove(widgetNameKey(appWidgetId))
+                .remove(widgetColorKey(appWidgetId)).apply();
     }
 
     /** 选中的门所属区域与在线状态：主界面卡片用来「显示这扇门」。旧数据为空时会退化成只显示 id。 */

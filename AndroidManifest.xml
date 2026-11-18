@@ -38,6 +38,13 @@
             android:theme="@style/FloatingLog"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- 小组件设置：横排标签管理桌面已放置的各组件（改名/换色/绑门），浮层外观 -->
+        <activity
+            android:name=".WidgetConfigActivity"
+            android:exported="false"
+            android:theme="@style/FloatingDoorList"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <!-- 桌面小部件：4x2 卡片，点按钮直接开门。exported 仅为接收桌面（AppWidget 服务）的更新广播 -->
         <!-- 四种尺寸的小部件：挑选列表里是四条独立条目，用户按需选一个放桌面 -->
         <receiver

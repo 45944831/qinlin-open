@@ -34,6 +34,21 @@ public class DoorListActivity extends Activity {
     /** 桌面小部件配置：带有效 appWidgetId 时，选门只绑定该小部件，不改全局默认门。 */
     public static final String EXTRA_WIDGET_ID = "widget_id";
 
+    /** 浮层配色：编译期常量，与 MainActivity 的调色板同源，不再逐处 Color.parseColor。 */
+    private static final int C_INK = 0xFF16233B;        // 标题深墨
+    private static final int C_NAVY = 0xFF1B3A6B;       // 按钮文字深蓝
+    private static final int C_STEEL = 0xFF6B7688;      // 「稍后再说」灰字
+    private static final int C_TIP = 0xFF607089;        // 顶部提示行
+    private static final int C_SUBTITLE = 0xFF3C587F;   // 小区副标题
+    private static final int C_STATUS_TEXT = 0xFF22304B;// 状态框正文
+    private static final int C_BLUE_SOFT = 0xFFE3EAF6;  // 浅蓝按钮底
+    private static final int C_STROKE = 0xFFC9D6EA;     // 常规浅描边
+    private static final int C_CARD_EDGE = 0xFFD6E2F5;  // 浮层卡片描边
+    private static final int C_SKIP_BG = 0xFFF1F3F7;    // 「稍后再说」按钮底
+    private static final int C_STATUS_BG = 0xFFE9EEF7;  // 状态框底
+    private static final int C_STATUS_EDGE = 0xFF9DB4DC;// 状态框描边
+    private static final int C_SEL_BLUE = 0xFF2563EB;   // 选中门蓝底
+
     private TextView subtitleTv;
     private TextView statusTv;
     private LinearLayout doorsBox;
@@ -103,7 +118,7 @@ public class DoorListActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.WHITE);
         bg.setCornerRadius(dp(18));
-        bg.setStroke(dp(1), Color.parseColor("#D6E2F5"));
+        bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(14));
         card.setPadding(dp(16), dp(14), dp(16), dp(12));
@@ -116,14 +131,14 @@ public class DoorListActivity extends Activity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         boolean widgetConfig = configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID;
         titleRow.addView(label(widgetConfig ? "为小组件选门" : onboarding ? "选择要控制的门" : "门列表", 21,
-                        Color.parseColor("#16233B"), true),
+                        C_INK, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        closeTv = label("✕ 关闭", 14, Color.parseColor("#1B3A6B"), true);
+        closeTv = label("✕ 关闭", 14, C_NAVY, true);
         closeTv.setPadding(dp(18), dp(10), dp(18), dp(10));
         GradientDrawable closeBg = new GradientDrawable();
-        closeBg.setColor(Color.parseColor("#E3EAF6"));
+        closeBg.setColor(C_BLUE_SOFT);
         closeBg.setCornerRadius(dp(10));
-        closeBg.setStroke(dp(1), Color.parseColor("#C9D6EA"));
+        closeBg.setStroke(dp(1), C_STROKE);
         closeTv.setBackground(closeBg);
         closeTv.setContentDescription("关闭门列表，返回主界面");
         closeTv.setOnClickListener(new View.OnClickListener() {
@@ -139,22 +154,22 @@ public class DoorListActivity extends Activity {
                         : onboarding
                             ? "首次登录 · 选一扇门作为默认开门，选好后直接进入主界面"
                             : "点一扇门即显示到主界面 · 点卡片外可收起",
-                12, Color.parseColor("#607089"), false);
+                12, C_TIP, false);
         tip.setPadding(0, dp(2), 0, 0);
         card.addView(tip);
 
-        subtitleTv = label("小区：读取中…", 13, Color.parseColor("#3C587F"), false);
+        subtitleTv = label("小区：读取中…", 13, C_SUBTITLE, false);
         subtitleTv.setPadding(0, dp(8), 0, dp(6));
         card.addView(subtitleTv);
 
         // 固定操作行：只保留「刷新门列表」，占满整行更好按。
         // 关闭统一交给标题行「✕ 关闭」/ 点卡片外 / 系统返回键。
-        Button refreshBtn = button("↻ 刷新门列表", Color.parseColor("#E3EAF6"),
-                Color.parseColor("#1B3A6B"));
+        Button refreshBtn = button("↻ 刷新门列表", C_BLUE_SOFT,
+                C_NAVY);
         GradientDrawable refreshBg = new GradientDrawable();
-        refreshBg.setColor(Color.parseColor("#E3EAF6"));
+        refreshBg.setColor(C_BLUE_SOFT);
         refreshBg.setCornerRadius(dp(10));
-        refreshBg.setStroke(dp(1), Color.parseColor("#C9D6EA"));
+        refreshBg.setStroke(dp(1), C_STROKE);
         refreshBtn.setBackground(refreshBg);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -167,8 +182,8 @@ public class DoorListActivity extends Activity {
 
         // 引导模式的退路：只有「读取失败 / 一扇门都没有」时才显示，
         // 否则用户会因为门列表拉不下来而永远回不到主界面。
-        skipBtn = button("稍后再说，先进入主界面", Color.parseColor("#F1F3F7"),
-                Color.parseColor("#6B7688"));
+        skipBtn = button("稍后再说，先进入主界面", C_SKIP_BG,
+                C_STEEL);
         skipBtn.setVisibility(View.GONE);
         LinearLayout.LayoutParams skipLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -188,12 +203,12 @@ public class DoorListActivity extends Activity {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(0, dp(8), 0, dp(16));
 
-        statusTv = label("正在读取门列表…", 14, Color.parseColor("#22304B"), false);
+        statusTv = label("正在读取门列表…", 14, C_STATUS_TEXT, false);
         statusTv.setPadding(dp(14), dp(12), dp(14), dp(12));
         GradientDrawable box = new GradientDrawable();
-        box.setColor(Color.parseColor("#E9EEF7"));
+        box.setColor(C_STATUS_BG);
         box.setCornerRadius(dp(10));
-        box.setStroke(dp(1), Color.parseColor("#9DB4DC"));
+        box.setStroke(dp(1), C_STATUS_EDGE);
         statusTv.setBackground(box);
         body.addView(statusTv);
 
@@ -412,13 +427,13 @@ public class DoorListActivity extends Activity {
                 for (final QinlinApi.Door d : doors) {
                     if (!d.kind.equals(lastKind)) {
                         TextView group = label("▸ " + d.kind + " 区域", 13,
-                                Color.parseColor("#1B3A6B"), true);
+                                C_NAVY, true);
                         group.setPadding(0, dp(12), 0, dp(2));
                         doorsBox.addView(group);
                         lastKind = d.kind;
                     }
-                    Button b = button(d.listLabel(), Color.parseColor("#FFFFFF"),
-                            Color.parseColor("#1B3A6B"));
+                    Button b = button(d.listLabel(), Color.WHITE,
+                            C_NAVY);
                     b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                     b.setPadding(dp(12), dp(8), dp(12), dp(8));
                     style(b, d.listLabel(), d.id == selected);
@@ -472,11 +487,10 @@ public class DoorListActivity extends Activity {
     private void style(Button b, String text, boolean on) {
         GradientDrawable gd = new GradientDrawable();
         gd.setCornerRadius(dp(8));
-        gd.setColor(Color.parseColor(on ? "#2563EB" : "#FFFFFF"));
-        gd.setStroke(on ? dp(2) : dp(1),
-                Color.parseColor(on ? "#1B3A6B" : "#C9D6EA"));
+        gd.setColor(on ? C_SEL_BLUE : Color.WHITE);
+        gd.setStroke(on ? dp(2) : dp(1), on ? C_NAVY : C_STROKE);
         b.setBackground(gd);
-        b.setTextColor(Color.parseColor(on ? "#FFFFFF" : "#1B3A6B"));
+        b.setTextColor(on ? Color.WHITE : C_NAVY);
         b.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         b.setText((on ? "✓  " : "     ") + text);
     }

@@ -43,6 +43,8 @@ public class MainActivity extends Activity {
     private static final int REQ_DOOR = 1001;
     /** 日志二级弹窗：只用来在返回时刷新入口上的条数。 */
     private static final int REQ_LOG = 1002;
+    /** 小组件设置浮层：返回后刷新桌面（改名/换色/绑门可能已变）。 */
+    private static final int REQ_WIDGET_CFG = 1003;
 
     /**
      * 主界面配色（与效果图同一套色值，集中在这里避免逐个 Color.parseColor）。
@@ -313,6 +315,12 @@ public class MainActivity extends Activity {
         if (requestCode == REQ_LOG) {
             logPanelOpen = false;
             updateLogToggleText();      // 弹窗里可能清空 / 筛选过，回来刷新条数
+            return;
+        }
+        if (requestCode == REQ_WIDGET_CFG) {
+            // 设置界面里可能改了默认门的绑定，回来刷新桌面卡片与门信息
+            OpenWidget.refreshAll(this);
+            refreshDoorLabel();
             return;
         }
         if (requestCode == REQ_DOOR) {
@@ -855,15 +863,29 @@ public class MainActivity extends Activity {
         doorMetaTv.setEllipsize(TextUtils.TruncateAt.END);
         bottom.addView(doorMetaTv, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView widgetCfgTv = label("组件设置 ▸", 11, C_BLUE, true);
+        widgetCfgTv.setTextSize(11f);
+        widgetCfgTv.setPadding(dp(10), dp(6), dp(6), dp(6));
+        widgetCfgTv.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openWidgetConfig(); }
+        });
+        bottom.addView(widgetCfgTv);
         TextView switchTv = label("切换门 ▸", 11, C_BLUE, true);
         switchTv.setTextSize(11.5f);
-        switchTv.setPadding(dp(12), dp(6), 0, dp(6));
+        switchTv.setPadding(dp(8), dp(6), 0, dp(6));
         switchTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { openDoorList(); }
         });
         bottom.addView(switchTv);
         card.addView(bottom);
         return card;
+    }
+
+    /** 打开小组件设置浮层：管理桌面上已放置组件的改名/换色/绑门。 */
+    private void openWidgetConfig() {
+        AppLog.i(AppLog.UI, "打开小组件设置界面");
+        Intent i = new Intent(this, WidgetConfigActivity.class);
+        startActivityForResult(i, REQ_WIDGET_CFG);
     }
 
     /** 一列指标（小标题 + 数值），返回数值 TextView 供刷新。 */
