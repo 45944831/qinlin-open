@@ -59,6 +59,16 @@ public class DoorListActivity extends Activity {
     private boolean onboarding;
     private int configuringWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
     private long lastBackAt;
+    /**
+     * 页面是否还活着：后台线程拿到结果时浮层可能已经关了，
+     * 旧代码仍会 runOnUiThread 去操作已销毁的 View（表情上不一定崩，但属于野引用）。
+     */
+    private volatile boolean alive = true;
+    /**
+     * 是否已有一次联网刷新在跑。只在主线程读写（onCreate / 刷新按钮），
+     * 连点「↻ 刷新门列表」不会并发发起多轮请求，也就不会出现旧结果后到覆盖新缓存。
+     */
+    private boolean loading;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,6 +87,12 @@ public class DoorListActivity extends Activity {
         setupFloatingWindow();
         buildUi();
         loadDoors();
+    }
+
+    @Override
+    protected void onDestroy() {
+        alive = false;
+        super.onDestroy();
     }
 
     /** 把 Activity 窗口做成中央悬浮卡片：宽度约屏宽 92%，高度约屏高 76%。 */
@@ -263,6 +279,7 @@ public class DoorListActivity extends Activity {
         if (!onboarding) return;
         runOnUiThread(new Runnable() {
             @Override public void run() {
+                if (!alive) return;
                 if (skipBtn != null) skipBtn.setVisibility(View.VISIBLE);
                 if (closeTv != null) closeTv.setVisibility(View.VISIBLE);
             }
@@ -274,23 +291,38 @@ public class DoorListActivity extends Activity {
         if (!onboarding) return;
         runOnUiThread(new Runnable() {
             @Override public void run() {
+                if (!alive) return;
                 if (skipBtn != null) skipBtn.setVisibility(View.GONE);
                 if (closeTv != null) closeTv.setVisibility(View.GONE);
             }
         });
     }
 
+    /**
+     * 错误码 → 界面前缀。映射统一放在 {@link Errors}，这里只做转发
+     * （与 MainActivity 的 toast 文案保持同一份，不再各写一套）。
+     */
+    private static String friendlyCode(String code) {
+        return Errors.prefixFromCode(code);
+    }
+
     private void status(final String s) {
         // 浮层保留单条状态提示，同时写入统一日志，主界面日志流能看到门列表全过程
         AppLog.i(AppLog.UI, "门列表 · " + s);
         runOnUiThread(new Runnable() {
-            @Override public void run() { statusTv.setText(s); }
+            @Override public void run() {
+                if (!alive || statusTv == null) return;
+                statusTv.setText(s);
+            }
         });
     }
 
     private void subtitle(final String s) {
         runOnUiThread(new Runnable() {
-            @Override public void run() { subtitleTv.setText(s); }
+            @Override public void run() {
+                if (!alive || subtitleTv == null) return;
+                subtitleTv.setText(s);
+            }
         });
     }
 
@@ -306,6 +338,11 @@ public class DoorListActivity extends Activity {
      * 缓存命中也照样后台刷新，保证看到的是最新门禁权限。
      */
     private void loadDoors(final boolean allowCache) {
+        if (loading) {
+            AppLog.i(AppLog.DOORS, "门列表正在刷新中，忽略重复刷新请求");
+            toast("正在刷新，请稍候…");
+            return;
+        }
         final String token = Prefs.session(this);
         if (!Prefs.loggedIn(this)) {
             AppLog.w(AppLog.DOORS, "门列表打开但未登录 / 凭证已被标记超时");
@@ -357,6 +394,7 @@ public class DoorListActivity extends Activity {
         }
         if (cached == null) toast("正在读取门列表…");
 
+        loading = true;
         new Thread(new Runnable() {
             @Override public void run() {
                 AppLog.bind(trace);
@@ -386,7 +424,7 @@ public class DoorListActivity extends Activity {
                         showSkip();
                     } else {
                         AppLog.e(AppLog.ERR, "门列表读取失败 [" + e.code + "] " + e.getMessage());
-                        status("[" + e.code + "] " + e.getMessage()
+                        status(friendlyCode(e.code) + e.getMessage()
                                 + (cached != null ? "\n仍在显示上次缓存（" + cached.age() + "）。" : ""));
                         if (cached == null) showSkip();
                     }
@@ -397,6 +435,10 @@ public class DoorListActivity extends Activity {
                     if (cached == null) showSkip();
                 } finally {
                     AppLog.unbind();
+                    // 无论成功失败都解锁，否则一次失败会让「刷新」永久失效
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { loading = false; }
+                    });
                 }
             }
         }).start();
@@ -412,6 +454,7 @@ public class DoorListActivity extends Activity {
         if (doors != null && !doors.isEmpty()) hideSkip();   // 有门可选，关闭入口收回
         runOnUiThread(new Runnable() {
             @Override public void run() {
+                if (!alive || doorsBox == null) return;
                 doorsBox.removeAllViews();
                 int selected = Prefs.doorId(DoorListActivity.this);
                 if (configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {

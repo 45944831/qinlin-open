@@ -8,8 +8,11 @@
 !/AndroidManifest.xml
 !/build-apk.py
 !/api-probe.py
+!/run-tests.py
 !/src/
 !/src/**
+!/tests/
+!/tests/**
 !/res/
 !/res/**
 !/docs/

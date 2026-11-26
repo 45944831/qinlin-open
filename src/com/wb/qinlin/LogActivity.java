@@ -42,8 +42,12 @@ public class LogActivity extends Activity {
 
     private static final String[] FILTERS =
             { "全部", "开门", "登录", "门列表", "网络", "系统", "错误" };
-    /** 一次最多渲染多少条：再多就用「导出」看全量，避免一次排版过重。 */
-    private static final int MAX_LINES = 300;
+    /**
+     * 一次最多渲染多少条。与 {@link AppLog#MEM_MAX} 同源——内存里就这么多，
+     * 再往上没有可渲染的内容。旧实现硬编码 300，而入口文案用的是内存真实条数（最多 400），
+     * 于是「入口 400 条、点进去最多 300 条」（2026-11-26 真机发现）。
+     */
+    private static final int MAX_LINES = AppLog.MEM_MAX;
     private static final int REQ_EXPORT = 2001;
 
     /** 弹窗配色：编译期常量，不再逐处 Color.parseColor。 */
@@ -79,6 +83,10 @@ public class LogActivity extends Activity {
     private boolean follow = true;
     /** 手指是否还按在日志上：按住期间不抢滚动位置，避免和手指打架。 */
     private boolean touching;
+    /** 剪贴板隐私提示是否已经弹过（Android 9 及以下只需要提示一次）。 */
+    private boolean clipboardWarned;
+    /** 是否已挂上「布局完成后再滚到底」的监听：避免每批日志都注册一个新的。 */
+    private boolean scrollAfterLayoutPending;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable renderTask = new Runnable() {
@@ -99,7 +107,9 @@ public class LogActivity extends Activity {
         setupWindow();
         buildUi();
         AppLog.addListener(logListener);
-        AppLog.i(AppLog.UI, "打开分类日志弹窗");
+        // 刻意不写「打开日志弹窗」这条：查看日志不应该改变日志本身。
+        // 旧实现每次打开都多一条，于是主界面入口写「共 N 条」、点进来却显示 N+1，
+        // 每次都要解释一遍（2026-11-26 真机测试发现）。
         render();
     }
 
@@ -108,6 +118,17 @@ public class LogActivity extends Activity {
         AppLog.removeListener(logListener);
         ui.removeCallbacks(renderTask);
         super.onDestroy();
+    }
+
+    /**
+     * Manifest 里声明了 configChanges，旋转不会重建 Activity，窗口尺寸也就不会重新算。
+     * 旧实现只在 onCreate 调 setLayout，横屏后仍按竖屏像素给宽高，窗口可能高出屏幕，
+     * 标题行的「✕ 关闭」被顶到屏幕外。这里补一次重算。
+     */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        setupWindow();
     }
 
     /** 接近全屏的浮层：宽 96%、高 86%，四周留出主界面轮廓。 */
@@ -180,7 +201,7 @@ public class LogActivity extends Activity {
         tools.setOrientation(LinearLayout.HORIZONTAL);
         filterBtn = smallButton("筛选：全部 ▸", C_FILTER_BG,
                 C_NAVY);
-        Button copyBtn = smallButton("复制全部", C_BLUE_SOFT,
+        Button copyBtn = smallButton("复制最近", C_BLUE_SOFT,
                 C_NAVY);
         Button exportBtn = smallButton("导出文件", C_BLUE_SOFT,
                 C_NAVY);
@@ -317,7 +338,28 @@ public class LogActivity extends Activity {
         setContentView(root);
     }
 
-    private void copyText(String s, String tip) {
+    private void copyText(final String s, final String tip) {
+        // Android 9 及以下：任何前台应用都能读到剪贴板。日志里含机型、小区/门名、
+        // 掩码手机号与 openid 指纹（不含明文凭证，但仍属于本机诊断信息）。
+        // 第一次复制前明确告知一次，之后不再打扰。
+        if (android.os.Build.VERSION.SDK_INT < 29 && !clipboardWarned) {
+            clipboardWarned = true;
+            new AlertDialog.Builder(this)
+                    .setTitle("剪贴板可能被其他应用读取")
+                    .setMessage("Android 9 及以下版本，任何前台应用都能读到剪贴板内容。\n\n"
+                            + "要复制的日志包含机型、小区名/门名与掩码手机号（不含明文凭证）。"
+                            + "如果介意，可以改用「导出文件」。")
+                    .setPositiveButton("仍要复制", new DialogInterface.OnClickListener() {
+                        @Override public void onClick(DialogInterface d, int w) { doCopy(s, tip); }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+            return;
+        }
+        doCopy(s, tip);
+    }
+
+    private void doCopy(String s, String tip) {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("qinlin-log", s));
@@ -329,19 +371,24 @@ public class LogActivity extends Activity {
     }
 
     /**
-     * 「复制全部」：exportText() 要同步读轮转 + 当前两份日志文件（最大各 256KB），
-     * 不能在主线程做——后台拼好全文，再回主线程写剪贴板。
+     * 「复制最近」：头部快照 + 内存里最近 200 条。
+     *
+     * <p>以前这里复制的是 {@code exportText()}（磁盘完整历史，最大 512KB）：
+     * 体积大、贴进聊天窗口要滚半天，而且为了拼全文专门开了一个后台线程。
+     * 现在走 {@link AppLog#recentText}——体量可控、内容就是「刚刚看到的那些」，
+     * 需要完整历史时用「导出文件」（SAF，不经过剪贴板）。</p>
      */
     private void copyAllLogsAsync() {
         final Context app = getApplicationContext();
-        Ui.toast(this, "正在整理全部日志…");
+        Ui.toast(this, "正在整理最近日志…");
         new Thread(new Runnable() {
             @Override public void run() {
-                final String text = AppLog.exportText(app);
+                // snapshot/header 里有包信息与偏好读取，仍放后台
+                final String text = AppLog.recentText(app);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || isDestroyed()) return;
-                        copyText(text, "全部日志已复制");
+                        copyText(text, "最近 200 条日志已复制");
                     }
                 });
             }
@@ -432,14 +479,46 @@ public class LogActivity extends Activity {
         }
         if (sb.length() == 0) sb.append("该筛选下暂无日志，点「筛选」切换分类。");
         logTv.setText(sb);
-        footTv.setText("当前显示 " + list.size() + " 条（最多 " + MAX_LINES
-                + " 条）· 全部日志已保存在本机，可用上方「导出文件 / 复制全部」取出");
+        // 条数和入口用同一个来源（AppLog 内存条数）：入口「共 N 条」、页内「当前显示 X 条 / 共 N 条」，
+        // 筛选时 X < N 也解释得通，不会再出现两个互相矛盾的上限。
+        footTv.setText("当前显示 " + list.size() + " 条 / 共 " + AppLog.size()
+                + " 条 · 全部日志已保存在本机，可用上方「导出文件 / 复制最近」取出");
 
-        if (follow) {
-            logScroll.post(new Runnable() {
-                @Override public void run() { scrollToBottom(); }
+        if (follow) scrollToBottomAfterLayout();
+    }
+
+    /**
+     * 等 TextView 真正完成布局后再滚到底。
+     *
+     * <p>旧实现是 setText 之后立刻 post(scrollToBottom)：那一刻 logTv 还是**上一批**的高度，
+     * 首次进入甚至是 0（maxScroll 直接返回 0，一帧都不滚）。表现就是「打开日志停在中间」，
+     * 而且每来一批新日志就差一批——永远差一屏。这里改成监听一次全局布局，
+     * 布局完成后再按真实高度滚，同时保留一次 post 兜底（内容没变化时不会再触发布局）。</p>
+     */
+    private void scrollToBottomAfterLayout() {
+        if (logTv == null || logScroll == null) return;
+        if (!scrollAfterLayoutPending) {
+            scrollAfterLayoutPending = true;
+            logTv.getViewTreeObserver().addOnGlobalLayoutListener(
+                    new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override public void onGlobalLayout() {
+                    android.view.ViewTreeObserver obs = logTv.getViewTreeObserver();
+                    if (obs.isAlive()) obs.removeOnGlobalLayoutListener(this);
+                    scrollAfterLayoutPending = false;
+                    if (!follow) return;
+                    int max = maxScroll();
+                    if (max > 0) logScroll.scrollTo(0, max);
+                    syncFollowState();
+                }
             });
         }
+        // 兜底：内容与上一批完全相同时不会触发布局，用一次 post 保证仍然贴底
+        logScroll.post(new Runnable() {
+            @Override public void run() {
+                if (!follow || touching) return;
+                scrollToBottom();
+            }
+        });
     }
 
     private int maxScroll() {

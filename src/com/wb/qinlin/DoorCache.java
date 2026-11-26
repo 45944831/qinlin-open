@@ -149,10 +149,13 @@ public final class DoorCache {
             names.append(cm.name);
         }
         String cname = names.length() > 0 ? names.toString() : "未读取到小区信息";
-        Prefs.setCommunityName(c, cname);
 
         List<QinlinApi.Door> all = new ArrayList<QinlinApi.Door>();
         StringBuilder errs = new StringBuilder();
+        /** 本次读取失败的小区：部分失败时用旧缓存把它们的门补回来。 */
+        java.util.HashSet<Integer> failedCids = new java.util.HashSet<Integer>();
+        /** 是否有网络层失败（IOException）：决定最终抛 NETWORK 还是 COMMUNITY_FAILED。 */
+        boolean netFail = false;
         int authorizeExpired = -1;
         for (QinlinApi.Community cm : cs) {
             try {
@@ -162,25 +165,71 @@ public final class DoorCache {
                 if (dr.authorizeExpired > authorizeExpired) authorizeExpired = dr.authorizeExpired;
             } catch (QinlinApi.ApiException e) {
                 if ("SESSION_EXPIRED".equals(e.code)) throw e;   // 凭证失效要交给界面处理
+                if ("NETWORK".equals(e.code)) netFail = true;
+                failedCids.add(Integer.valueOf(cm.id));
                 errs.append(cm.name).append(": ").append(e.getMessage()).append("\n");
                 AppLog.w(AppLog.DOORS, "小区「" + cm.name + "」门列表读取失败 [" + e.code + "]");
             } catch (Exception e) {
+                if (e instanceof java.io.IOException) netFail = true;
+                failedCids.add(Integer.valueOf(cm.id));
                 errs.append(cm.name).append(": ").append(e.getClass().getSimpleName()).append("\n");
                 AppLog.e(AppLog.DOORS, "小区「" + cm.name + "」门列表异常 " + AppLog.stack(e));
             }
         }
 
         String diag = QinlinApi.diag();
-        String note = diag;
+        StringBuilder note = new StringBuilder(diag);
         if (errs.length() > 0) {
-            note = (diag.length() > 0 ? diag + "\n" : "") + "部分小区读取失败：" + errs;
+            if (note.length() > 0) note.append("\n");
+            note.append("部分小区读取失败：").append(errs);
         }
 
         long at = System.currentTimeMillis();
-        save(c, cname, all, at, errs.length() > 0 ? note : "", authorizeExpired);
+        // 「所有小区都失败」≠「这个账号没有门」：前者必须保留上次可用缓存，
+        // 否则一次弱网就会把用户已缓存的整份门列表覆盖成空，下次打开连门都选不了。
+        // 直接抛给界面（message 不带技术细节），由界面走「失败 + 仍在显示上次缓存」的既有路径。
+        boolean readFailed = !cs.isEmpty() && all.isEmpty() && errs.length() > 0;
+        if (readFailed) {
+            AppLog.w(AppLog.DOORS, "所有小区门列表均读取失败 → 不覆盖已有缓存与小区名");
+            if (netFail) {
+                // 断网 / 超时不是「网关拒绝」，界面要按可重试的网络问题提示
+                throw new QinlinApi.ApiException("NETWORK",
+                        "网络异常，读不到门列表。请检查网络后点「↻ 刷新门列表」重试。");
+            }
+            throw new QinlinApi.ApiException("COMMUNITY_FAILED",
+                    "这 " + cs.size() + " 个小区都没读到门，可能是网络或网关异常。");
+        }
+
+        // 部分小区失败：把上次缓存里这些小区的门补回来。
+        // 旧实现直接用「本次成功子集」整体覆盖缓存，弱网下某个小区的门会从列表里消失，
+        // 用户看到的是「门少了」，而不是「这一个小区没读到」。
+        if (!failedCids.isEmpty()) {
+            Data old = load(c);
+            int kept = 0;
+            if (old != null) {
+                for (QinlinApi.Door d : old.doors) {
+                    if (!failedCids.contains(Integer.valueOf(d.communityId))) continue;
+                    boolean dup = false;
+                    for (QinlinApi.Door x : all) {
+                        if (x.id == d.id) { dup = true; break; }
+                    }
+                    if (!dup) {
+                        all.add(d);
+                        kept++;
+                    }
+                }
+            }
+            if (kept > 0) {
+                note.append("\n其中 ").append(kept).append(" 扇门沿用上次缓存（对应小区本次没读到）");
+                AppLog.w(AppLog.DOORS, "部分小区失败 → 沿用旧缓存补回 " + kept + " 扇门");
+            }
+        }
+
+        Prefs.setCommunityName(c, cname);
+        save(c, cname, all, at, note.toString(), authorizeExpired);
         AppLog.i(AppLog.DOORS, "门列表读取完成 " + all.size() + " 扇门，耗时 " + (at - t0) + "ms"
                 + (errs.length() > 0 ? "（部分小区失败）" : "")
                 + " | authorizeExpired=" + authorizeExpired);
-        return new Data(cname, all, at, note, false, authorizeExpired);
+        return new Data(cname, all, at, note.toString(), false, authorizeExpired);
     }
 }

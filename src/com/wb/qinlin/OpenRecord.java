@@ -89,8 +89,10 @@ public final class OpenRecord {
                 items.add(new Item(System.currentTimeMillis(), ok, ms, door, note, from));
                 List<Item> trimmed = trim(items);
                 save(c, trimmed);
-                memCache = trimmed;   // 落盘成功才更新缓存；save 失败时仅记录漂移，跨进程自然纠正
+                memCache = trimmed;   // 落盘成功才更新缓存
             } catch (Throwable t) {
+                // 落盘失败：缓存作废，下次读取回到磁盘，避免界面显示「已写入」的假象
+                memCache = null;
                 AppLog.w(AppLog.OPEN, "本机开门记录写入失败（不影响开门）："
                         + t.getClass().getSimpleName());
             }
@@ -133,10 +135,12 @@ public final class OpenRecord {
     public static int todayCount(Context c) {
         int n = 0;
         Calendar today = Calendar.getInstance();
+        // 复用一个 Calendar：旧实现每条记录都 new 一个（每次刷新几十条）。
+        // Calendar.getInstance() 要读时区与 Locale，代价并不小。
+        Calendar t = Calendar.getInstance();
         synchronized (LOCK) {
             for (Item it : load(c)) {
                 if (!it.ok) continue;
-                Calendar t = Calendar.getInstance();
                 t.setTimeInMillis(it.at);
                 if (sameDay(t, today)) n++;
             }
@@ -144,7 +148,7 @@ public final class OpenRecord {
         return n;
     }
 
-    /** 全部条数（用于「全部 ▸ / 收起」是否显示）。 */
+    /** 全部条数（用于「展开 ▸ / 收起 ▴」是否显示）。 */
     public static int count(Context c) {
         synchronized (LOCK) {
             return load(c).size();
@@ -153,8 +157,11 @@ public final class OpenRecord {
 
     public static void clear(Context c) {
         synchronized (LOCK) {
+            memCache = new ArrayList<Item>();   // 缓存必须一起清，否则界面还显示刚清掉的记录
             File f = new File(c.getFilesDir(), FILE);
             if (f.exists()) f.delete();
+            File bak = new File(c.getFilesDir(), FILE + ".bak");
+            if (bak.exists()) bak.delete();
         }
     }
 
@@ -199,6 +206,12 @@ public final class OpenRecord {
     // ---------- 存储 ----------
 
     private static List<Item> load(Context c) {
+        // 命中进程内缓存：主界面 refreshStats() 一次要调 todayCount / last / recent / count
+        // 四五个读接口，没有这一层就是主线程 4~5 次整文件解析。
+        // 注释此前一直声称有缓存，但 load() 从未读过 memCache（只写不读），等于没生效。
+        synchronized (LOCK) {
+            if (memCache != null) return new ArrayList<Item>(memCache);
+        }
         List<Item> out = new ArrayList<Item>();
         File f = new File(c.getFilesDir(), FILE);
         if (!f.exists()) return out;
@@ -221,11 +234,19 @@ public final class OpenRecord {
             }
         } catch (Throwable t) {
             AppLog.w(AppLog.OPEN, "读取本机开门记录失败：" + t.getClass().getSimpleName());
-        } finally {
-            close(r);
-        }
-        return out;
+    } finally {
+        close(r);
     }
+    synchronized (LOCK) {
+        // 读盘期间可能已有别的线程写完并更新了缓存：以缓存为准，别用旧快照覆盖它
+        if (memCache == null) {
+            memCache = new ArrayList<Item>(out);
+        } else {
+            out = new ArrayList<Item>(memCache);
+        }
+    }
+    return out;
+}
 
     private static void save(Context c, List<Item> items) {
         StringBuilder sb = new StringBuilder();
@@ -254,17 +275,26 @@ public final class OpenRecord {
             } finally {
                 close(w);
             }
-            if (!tmp.renameTo(dst)) {
-                // 改名失败（个别机型）：退回直接覆盖写
-                OutputStreamWriter w2 = new OutputStreamWriter(new FileOutputStream(dst), "UTF-8");
-                try {
-                    w2.write(sb.toString());
-                    w2.flush();
-                } finally {
-                    close(w2);
-                }
-                tmp.delete();
+        if (!tmp.renameTo(dst)) {
+            // 改名失败（个别机型）：退回「备份 + 直接覆盖写」。
+            // 直接 new FileOutputStream(dst) 会先把现有文件截成 0 字节，
+            // 万一写到一半失败（空间不足 / 进程被杀），历史记录会整体丢失；
+            // 先留一份 .bak，写完再删，最坏情况还能从备份恢复。
+            File bak = new File(dir, FILE + ".bak");
+            if (bak.exists()) bak.delete();
+            if (dst.exists() && !dst.renameTo(bak)) {
+                AppLog.w(AppLog.OPEN, "开门记录备份失败，本次覆盖写缺少回滚点");
             }
+            OutputStreamWriter w2 = new OutputStreamWriter(new FileOutputStream(dst), "UTF-8");
+            try {
+                w2.write(sb.toString());
+                w2.flush();
+            } finally {
+                close(w2);
+            }
+            if (bak.exists()) bak.delete();
+            tmp.delete();
+        }
         } catch (Throwable t) {
             AppLog.w(AppLog.OPEN, "本机开门记录落盘失败：" + t.getClass().getSimpleName());
         }
@@ -276,6 +306,14 @@ public final class OpenRecord {
         List<Item> kept = new ArrayList<Item>();
         for (Item it : items) {
             if (it.at >= cutoff) kept.add(it);
+        }
+        if (kept.isEmpty() && !items.isEmpty()) {
+            // 只可能是系统时间被大幅前调（远超 90 天）。宁可保留最近 10 条也不要一次清空，
+            // 并把这件事写进日志——用户看到的应该是「记录变少了」，而不是「记录全没了」。
+            int from = Math.max(0, items.size() - 10);
+            kept.addAll(items.subList(from, items.size()));
+            AppLog.w(AppLog.OPEN, "90 天截断会删光全部 " + items.size()
+                    + " 条记录（疑似系统时间异常）→ 保留最近 " + kept.size() + " 条");
         }
         while (kept.size() > MAX) kept.remove(0);
         return kept;

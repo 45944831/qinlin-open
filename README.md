@@ -62,10 +62,22 @@
 ```bash
 python build-apk.py              # 产物 qinlin-open.apk（debug 签名）
 adb install -r qinlin-open.apk
+
+python run-tests.py              # core 纯逻辑自检（33 条用例，不需要 Android 设备）
 ```
 
-依赖 JDK 17、Android SDK `build-tools/29.0.3`、`tools/android.jar`（API 33），
-路径在 `build-apk.py` 顶部按本机修改。**仓库不含 SDK 文件与签名私钥**，首次构建需准备：
+依赖 JDK 17、Android SDK `build-tools`、`tools/android.jar`（API 33）。
+**换机器不用改代码**，按下面任一方式指定路径即可：
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `JAVA_HOME` | JDK 根目录 | 找 PATH 里的 `javac`，再退回历史路径 |
+| `ANDROID_SDK_ROOT` / `ANDROID_HOME` | Android SDK 根目录 | `C:\Program Files (x86)\Android\android-sdk` |
+| `ANDROID_BUILD_TOOLS` | 指定 build-tools 目录 | `build-tools/29.0.3`，不存在则取最新 |
+| `QINLIN_VERSION_CODE` / `QINLIN_VERSION_NAME` | 覆盖版本号 | 提交数 / `1.1-<短 commit>` |
+| `QINLIN_KEYSTORE` | 指定签名密钥库 | `build/debug.keystore`（首次自动生成） |
+
+**仓库不含 SDK 文件与签名私钥**，首次构建需准备 `android.jar`：
 
 ```bash
 mkdir -p tools && cd tools
@@ -73,8 +85,9 @@ curl -LO https://dl.google.com/android/repository/platform-33_r02.zip
 python -c "import zipfile; z=zipfile.ZipFile('platform-33_r02.zip'); open('android.jar','wb').write(z.read('android-13/android.jar'))"
 ```
 
-`build/debug.keystore` 由脚本自动生成。**新密钥与旧 APK 签名不同**，覆盖安装可能需先卸载旧包
-（会丢失本机登录凭证）。
+> ⚠️ **签名密钥要备份**：`build/debug.keystore` 丢失后就再也无法覆盖升级，
+> 只能卸载重装（本机登录凭证会一起丢）。换正式分发时用 `QINLIN_KEYSTORE` 指向自己的 keystore 并离线保存。
+> 另外 `versionCode` 默认取 git 提交数，没有 `.git` 的源码压缩包会退回 Manifest 里的 `2 / 1.1`。
 
 ## 使用
 
@@ -171,13 +184,14 @@ python -c "import zipfile; z=zipfile.ZipFile('platform-33_r02.zip'); open('andro
 
 | 表现 | 含义 | 本 APK 的处理 |
 | --- | --- | --- |
-| `code:401` / 登录失效文案 | 凭证被作废 | 抛 `SESSION_EXPIRED`，二次确认后才提示重登 |
+| `code:401` / HTTP 401 / 登录失效文案 | 凭证被作废 | 抛 `SESSION_EXPIRED`，二次确认后才提示重登 |
 | `code:121` | 签名或签名头不被接受（缺头 / 时间戳越界 / 签名不匹配） | 抛 `SIGN_REJECTED`，提示协议版本头可能过期 |
 | HTTP 5xx | 上游异常 | 除 `message` 外还读 `exception` / `error` 字段（`message` 常是 `No message available`） |
 | 其它 `code != 0` | 门离线 / 无权限 / 业务拒绝 | 抛 `QINLIN_REJECTED`，附带脱敏后的服务端原文 |
 
 **弱网策略**：小区列表接口有 4 种请求姿势的兼容尝试，但只在「响应格式不符」时才换下一种；
-遇到网络层失败（超时 / 断网 / TLS）直接放弃，不再串行试 4 次，避免弱网下等满 4×20 秒。
+遇到网络层失败（超时 / 断网 / TLS）直接放弃，不再串行试 4 次，避免弱网下等满 4×20 秒；
+上游返回 5xx 时同样立即停手（属服务端故障，换 body 格式不会恢复）。
 
 ## 风险与边界
 
@@ -194,6 +208,14 @@ python -c "import zipfile; z=zipfile.ZipFile('platform-33_r02.zip'); open('andro
   完整触发场景、真机互踢证据与恢复步骤见上文「登录为什么会失效（真机实测结论）」。
 - `QinlinApi.java` 内的 APPID / APP_SECRET / AES 密钥是**上游公开协议常量**（非个人凭证），
   代码运行必需，故保留明文。
+- **不要把协议常量当成安全边界**：APK 可被反编译，任何写在客户端里的 `APP_SECRET` / 盐值都能被提取；
+  手机号 AES-ECB 与 MD5 签名只保证「请求格式对得上」，**不是机密性保护**。真正的安全边界是服务端
+  对 `sessionId` 的校验，以及本机 Keystore 对凭证的加密。
+- **本机日志的隐私边界**：日志已抹掉 sessionId / token / openid / 验证码 / 手机号明文（只留指纹与掩码），
+  但含机型、系统版本、小区名与门名。`复制最近` 在 Android 9 及以下会先提示一次
+  （那代系统的剪贴板对所有前台应用可见）；分享日志前请自行确认。
+- **门列表缓存属于账号**：退出登录 / 换账号会清空；弱网下某个小区读取失败时，会沿用上次缓存里的门
+  而不是把它们从列表里删掉，状态区会写明「沿用上次缓存」。
 
 ## 常见问题
 
@@ -230,6 +252,7 @@ A：APPID / APP_SECRET / AES 密钥是上游公开协议常量（非个人凭证
 
 | 日期 | 内容 |
 | --- | --- |
+| 2026-11-26 | 第八轮代码审查全量修复：换账号清门分支不可达（手机号改为登录成功才与凭证同一次落盘）、登录/发短信在途防护、JSON `null` 不再被当成 `"null"` 凭证、HTTP 401 纳入 `SESSION_EXPIRED`、退出登录隐藏开门区；探活去掉持锁网络 IO 并区分「真失效 / 网络异常 / 网关无结论」（弱网不再误报重新登录）、探活结果校验凭证是否已被新登录替换；门列表刷新在途控制与回调存活检查、组件名草稿保留、`AppLog` 句柄泄漏、`Net.online` 切换空窗误拦、5xx 立即停止换姿势、响应体 4MB 上限 |
 | 2026-11-18 | 小组件设置浮层：顶部横排标签管理所有已放置组件，可逐个改名（限 5 个字）、换主题色（6 套，作用于按钮与卡片底色）、指定控制哪扇门；1×1 显示组件名并按字数缩字号；主界面加「组件设置 ▸」入口，点卡片组件名直接定位；名称/配色按 `appWidgetId` 独立存储；真机反馈修正：颜色区 6 格等分对齐、选门按钮文案、多组件点击时只有被点组件显示「开门中」 |
 | 2026-11-16 · 第二批 | **O1** 门列表 `commonlyUsedDoor` 按单对象解析（旧代码整键跳过）；**O2** `code 121` 独立映射 `SIGN_REJECTED`；**O3** 上游 5xx 改读 `exception`/`error`；**O4** 弱网不再串行试 4 种请求姿势；**N1** 展示会话剩余有效期；**N2** 提示门禁授权到期标记；并修复「门列表 401 被兜底逻辑吞掉」导致只显示「未读取到门列表」的旧 bug |
 | 2026-11-16 · 第一批 | **P1** 凭证改 AndroidKeyStore AES-GCM 加密（明文自动迁移）；**P2** 门列表备用接口兜底；**P3** 协议头对齐 `5.2.6`/`3146`；**P4** 每个桌面小组件独立绑门；**P5** 开门失败不再写历史 |
@@ -243,9 +266,13 @@ A：APPID / APP_SECRET / AES 密钥是上游公开协议常量（非个人凭证
 | 路径 | 内容 |
 | --- | --- |
 | `src/com/wb/qinlin/` | 全部 Java 源码（界面、协议、缓存、日志、小组件） |
-| `src/com/wb/qinlin/SecureStore.java` | 本机凭证加密层（AndroidKeyStore AES-GCM，含明文自动迁移） |
+| `src/com/wb/qinlin/core/` | **纯逻辑、不 import android.***：手机号 / 验证码校验、TTL 衰减、改名字符截断 |
+| `src/com/wb/qinlin/SecureStore.java` | 本机凭证加密层（AndroidKeyStore AES-GCM + 字段名 AAD，含明文/v1 自动迁移） |
+| `src/com/wb/qinlin/Errors.java` | 统一错误文案（网络异常 / 业务码 → 人话），两个界面共用 |
+| `tests/CoreSelfTest.java` | core 包自检（33 条用例），`python run-tests.py` 直接跑 |
 | `res/` | XML 布局 / drawable / 小组件配置 |
-| `build-apk.py` | 离线构建脚本 |
+| `build-apk.py` | 离线构建脚本（SDK/JDK 走环境变量，版本号由 git 注入） |
+| `run-tests.py` | 零依赖测试入口（只需 JDK，不需要 Android SDK） |
 | `docs/DEVLOG.md` | 完整排查与真机实测记录（按时间追加，已脱敏） |
 | `docs/API-CONTRACT.md` | 真实接口契约、官方 APK 路径清单、备用路径与防失效规则 |
 | `docs/api-baseline.json` | 无凭证探测基线（15 条） |

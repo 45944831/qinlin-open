@@ -77,6 +77,13 @@ public class WidgetConfigActivity extends Activity {
     private List<OpenWidget.Installed> items;
     private int focusId = AppWidgetManager.INVALID_APPWIDGET_ID;
     private int selectedIndex = -1;
+    /**
+     * 组件名未保存的草稿，按 widgetId 保存。
+     * 编辑区在 onResume / 切标签 / 换色 / 选门返回时都会整块重建，
+     * 以前重建会直接用已保存值覆盖输入框，用户刚敲的名字就静默丢了。
+     */
+    private final java.util.HashMap<Integer, String> nameDrafts =
+            new java.util.HashMap<Integer, String>();
 
     private LinearLayout tabRow;
     private LinearLayout editorBox;
@@ -97,6 +104,16 @@ public class WidgetConfigActivity extends Activity {
         super.onResume();
         // 从门列表选门返回后，门名可能已变，重画当前编辑区
         if (selectedIndex >= 0) renderEditor(selectedIndex);
+    }
+
+    /**
+     * 声明了 configChanges，旋转不会重建 Activity；窗口尺寸是按 onCreate 时的
+     * 屏幕像素算的，不重算的话横屏后卡片可能高出屏幕，底部按钮被裁掉。
+     */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        setupFloatingWindow();
     }
 
     /** 悬浮卡片：宽 94%、高 82%，居中。 */
@@ -136,13 +153,24 @@ public class WidgetConfigActivity extends Activity {
             tabRow.addView(makeTab(i));
         }
         int target = 0;
+        boolean focusMissed = false;
         if (focusId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            // 先假设找不到：找不到时不再「静默改到第一个」，否则用户以为看到的是刚点的那个组件
+            target = -1;
             for (int i = 0; i < items.size(); i++) {
                 if (items.get(i).id == focusId) { target = i; break; }
             }
             focusId = AppWidgetManager.INVALID_APPWIDGET_ID; // 只定位一次
+            if (target < 0) {
+                target = 0;
+                focusMissed = true;
+            }
         }
         select(target);
+        if (focusMissed) {
+            AppLog.w(AppLog.UI, "小组件设置：要定位的实例已不在桌面，改为显示第一个组件");
+            Ui.toast(this, "该小组件已不在桌面，已显示第一个");
+        }
     }
 
     private void select(int index) {
@@ -191,6 +219,15 @@ public class WidgetConfigActivity extends Activity {
         if (name instanceof TextView) ((TextView) name).setTextColor(on ? Color.WHITE : C_INK);
     }
 
+    /** 改名保存后同步刷新顶部标签文字：标签只在 makeTab 时写过一次，不刷会一直显示旧名。 */
+    private void updateTabLabel(int index) {
+        if (index < 0 || index >= items.size() || index >= tabRow.getChildCount()) return;
+        View name = tabRow.getChildAt(index).findViewWithTag("tab_name");
+        if (name instanceof TextView) {
+            ((TextView) name).setText(items.get(index).name(this));
+        }
+    }
+
     /** 选中某个组件后的编辑区：改名 / 换色 / 选门。 */
     private void renderEditor(int index) {
         editorBox.removeAllViews();
@@ -205,10 +242,20 @@ public class WidgetConfigActivity extends Activity {
         editorBox.addView(label("组件名称（最多 5 个字，显示在桌面卡片上）", 13, C_INK, true));
         final EditText nameEt = new EditText(this);
         nameEt.setHint(it.name(this));
-        nameEt.setText(Prefs.widgetName(widgetId, this));
+        // 有未保存的草稿就优先恢复：编辑区重建（onResume / 切 Tab / 换色）不能吃掉用户输入
+        String draft = nameDrafts.get(widgetId);
+        nameEt.setText(draft != null ? draft : Prefs.widgetName(widgetId, this));
         nameEt.setSingleLine(true);
         nameEt.setTextSize(15);
         nameEt.setFilters(new InputFilter[]{NAME_FILTER}); // 输入时就限制 5 个字符（按码点）
+        // 监听放在 setText 之后：初始化那一次不算用户输入，不该生成草稿
+        nameEt.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+            @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                nameDrafts.put(widgetId, s.toString());
+            }
+        });
         GradientDrawable etBg = new GradientDrawable();
         etBg.setCornerRadius(dp(10));
         etBg.setColor(Color.WHITE);
@@ -222,9 +269,11 @@ public class WidgetConfigActivity extends Activity {
         saveNameBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 String n = nameEt.getText().toString().trim();
+                nameDrafts.remove(widgetId);   // 已保存：草稿使命结束，之后重建读持久化值
                 Prefs.setWidgetName(widgetId, WidgetConfigActivity.this, n);
                 OpenWidget.refreshAll(WidgetConfigActivity.this);
-                select(selectedIndex);   // 重画标签文字
+                updateTabLabel(selectedIndex);   // 顶部标签同步成新名字
+                select(selectedIndex);   // 重画编辑区（选中态 / 提示）
                 Ui.toast(WidgetConfigActivity.this, "名称已更新");
             }
         });

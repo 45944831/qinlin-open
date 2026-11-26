@@ -28,6 +28,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -90,8 +91,10 @@ public class MainActivity extends Activity {
     private static final int C_BTN_PRESS_EDGE = 0xFF7A100E;
     private static final int C_BTN_OFF_BOTTOM = 0xFF7C899D;
 
-    /** 记录卡默认展示行数；点「全部」展开到 10 行。 */
+    /** 记录卡默认展示行数；点「展开」一次展开到 20 行（再多对「上次开成没成」没有意义）。 */
     private static final int DEFAULT_RECORDS = 3;
+    /** 展开上限：不超过 OpenRecord.MAX（60），但一次铺 60 行会把主界面顶得很长。 */
+    private static final int RECORDS_EXPANDED = 20;
 
     /** 启动 / 开门耗时打点：真机可直接从日志读出首帧与端到端耗时，验证优化效果。 */
     private long createT0;
@@ -102,6 +105,15 @@ public class MainActivity extends Activity {
 
     private EditText phoneEt;
     private EditText codeEt;
+    /** 登录表单的两个按钮：请求在途时禁用，给出「已收到，别重复点」的视觉反馈。 */
+    private Button smsBtn;
+    private Button loginBtn;
+    /**
+     * 在途防护：以前按钮是局部变量、也没有任何标志位，连点会并发登录。
+     * 服务端按账号单会话，旧请求后到会用已作废的凭证覆盖新 session。
+     */
+    private boolean sendingSms;
+    private boolean loggingIn;
     /** 凭证被服务端判超时但本机仍保留时，给一条「不收短信即可恢复」的退路。 */
     private Button retryBtn;
 
@@ -110,9 +122,20 @@ public class MainActivity extends Activity {
      * 按钮上带条数，收起状态下也能看出后台确实在记录。
      */
     private Button logToggle;
+    /**
+     * 未登录态的「组件设置」入口。
+     *
+     * <p>组件设置原本只挂在门卡底部，而门卡在未登录时整块隐藏，于是没登录就改不了
+     * 组件名 / 主题色 / 绑门（2026-11-26 真机测试发现）。这里补一个独立入口，
+     * 只在「未登录 + 桌面上确实已经放了组件」时出现——新用户首屏不会多一行无关链接。</p>
+     */
+    private TextView widgetCfgLink;
     private int logCount;
     /** 弹窗是否已打开：避免连点入口叠出多个窗口。 */
     private boolean logPanelOpen;
+    /** 门列表 / 组件设置浮层同理：连点会在栈里叠两个实例，返回时要按两次才回主界面。 */
+    private boolean doorListOpen;
+    private boolean widgetCfgOpen;
     /**
      * 本次运行是否已经弹过「首次选门」引导。
      * 只在本 Activity 实例内生效：避免 onResume 反复拉起门列表，
@@ -255,6 +278,8 @@ public class MainActivity extends Activity {
         super.onResume();
         // 兜底复位：日志弹窗无论怎么退出，回到主界面后入口都必须还能点
         logPanelOpen = false;
+        doorListOpen = false;
+        widgetCfgOpen = false;
         updateLogToggleText();
         refreshDoorLabel();
         applyLoginState();
@@ -318,12 +343,14 @@ public class MainActivity extends Activity {
             return;
         }
         if (requestCode == REQ_WIDGET_CFG) {
+            widgetCfgOpen = false;
             // 设置界面里可能改了默认门的绑定，回来刷新桌面卡片与门信息
             OpenWidget.refreshAll(this);
             refreshDoorLabel();
             return;
         }
         if (requestCode == REQ_DOOR) {
+            doorListOpen = false;
             boolean wasOnboarding = doorListOnboarding;
             doorListOnboarding = false;
             if (resultCode != RESULT_OK || data == null) {
@@ -455,6 +482,13 @@ public class MainActivity extends Activity {
     private void expandOpenButtonHitArea() {
         if (openBtn == null || !(openBtn.getParent() instanceof View)) return;
         View parent = (View) openBtn.getParent();
+        if (openBtn.getVisibility() != View.VISIBLE) {
+            // 关键：按钮隐藏后 getHitRect() 返回的是上一次布局的旧矩形（宽高都 > 0），
+            // 旧代码据此继续 setTouchDelegate —— 于是登录表单的空白处点击会被转给
+            // 一个看不见的开门按钮，凭证超时态下甚至会经自动恢复真的把门打开。
+            parent.setTouchDelegate(null);
+            return;
+        }
         Rect r = new Rect();
         openBtn.getHitRect(r);
         if (r.width() <= 0 || r.height() <= 0) return;
@@ -463,6 +497,14 @@ public class MainActivity extends Activity {
         r.top = Math.max(0, r.top - dp(8));
         r.bottom += dp(24);
         parent.setTouchDelegate(new TouchDelegate(r, openBtn));
+    }
+
+    /** 撤掉开门按钮的扩展热区（按钮被隐藏时调用，不依赖下一次布局）。 */
+    private void clearOpenButtonHitArea() {
+        if (openBtn == null) return;
+        if (openBtn.getParent() instanceof View) {
+            ((View) openBtn.getParent()).setTouchDelegate(null);
+        }
     }
 
     /** 日志工具条小按钮：等宽横排，避免挤占开门区。 */
@@ -540,19 +582,26 @@ public class MainActivity extends Activity {
         phoneEt = new EditText(this);
         phoneEt.setHint("11 位手机号");
         phoneEt.setInputType(InputType.TYPE_CLASS_PHONE);
+        // 长度硬限制：粘贴超长字符串时直接截断，省得先报错再手改
+        phoneEt.setFilters(new android.text.InputFilter[]{
+                new android.text.InputFilter.LengthFilter(11)});
+        phoneEt.setSingleLine(true);
         loginBox.addView(phoneEt);
 
         codeEt = new EditText(this);
         codeEt.setHint("短信验证码");
         codeEt.setInputType(InputType.TYPE_CLASS_NUMBER);
+        codeEt.setFilters(new android.text.InputFilter[]{
+                new android.text.InputFilter.LengthFilter(8)});
+        codeEt.setSingleLine(true);
         loginBox.addView(codeEt);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, dp(6), 0, 0);
-        Button smsBtn = button("发送验证码", C_BLUE_SOFT,
+        smsBtn = button("发送验证码", C_BLUE_SOFT,
                 C_NAVY);
-        Button loginBtn = button("登录", C_BLUE, Color.WHITE);
+        loginBtn = button("登录", C_BLUE, Color.WHITE);
         LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         half.setMargins(0, dp(6), dp(4), 0);
@@ -681,14 +730,35 @@ public class MainActivity extends Activity {
             }
         });
         updateLogToggleText();
+        // 未登录态的组件设置入口（详见字段注释）：默认隐藏，由 applyLoginStateUi 按需显示
+        widgetCfgLink = label("组件设置（改名 / 换色 / 绑门）▸", 11, C_BLUE, true);
+        widgetCfgLink.setGravity(Gravity.CENTER);
+        widgetCfgLink.setPadding(0, dp(10), 0, dp(2));
+        widgetCfgLink.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openWidgetConfig(); }
+        });
+        widgetCfgLink.setVisibility(View.GONE);
+        page.addView(widgetCfgLink);
         page.addView(logToggle);
         versionFooter = makeVersionFooter();
         page.addView(versionFooter);
 
-        // 顶层叠加：页面 + 屏幕最上方的「已开门」横幅。
+        // 顶层叠加：可滚动的页面 + 屏幕最上方的「已开门」横幅。
         // 横幅盖在顶部而不是出现在屏幕下方，点开门按钮时手指遮不到。
+        //
+        // 为什么整页套 ScrollView：声明 configChanges 后旋转不重建，横屏 / 分屏时
+        // 可用高度只剩一半，而页面内容高约 650dp —— 旧的 MATCH_PARENT 直铺会把
+        // 开门按钮和它下面的记录卡整块裁到屏幕外，且没有任何滚动手段，只能退出重进。
+        // fillViewport=true 保证竖屏内容不足时仍撑满整屏，视觉与原来完全一致。
+        ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(true);
+        scroller.setVerticalScrollBarEnabled(false);
+        scroller.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroller.addView(page, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         FrameLayout rootLayer = new FrameLayout(this);
-        rootLayer.addView(page, new FrameLayout.LayoutParams(
+        rootLayer.addView(scroller, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         openBanner = makeOpenBanner();
         FrameLayout.LayoutParams bannerLp = new FrameLayout.LayoutParams(
@@ -883,9 +953,19 @@ public class MainActivity extends Activity {
 
     /** 打开小组件设置浮层：管理桌面上已放置组件的改名/换色/绑门。 */
     private void openWidgetConfig() {
+        if (widgetCfgOpen) {
+            AppLog.i(AppLog.UI, "忽略重复点击：小组件设置界面已打开");
+            return;
+        }
+        widgetCfgOpen = true;
         AppLog.i(AppLog.UI, "打开小组件设置界面");
         Intent i = new Intent(this, WidgetConfigActivity.class);
-        startActivityForResult(i, REQ_WIDGET_CFG);
+        try {
+            startActivityForResult(i, REQ_WIDGET_CFG);
+        } catch (Exception e) {
+            widgetCfgOpen = false;   // 起不来就复位，别让入口永久失效
+            AppLog.w(AppLog.UI, "打开小组件设置失败：" + AppLog.stack(e));
+        }
     }
 
     /** 一列指标（小标题 + 数值），返回数值 TextView 供刷新。 */
@@ -920,7 +1000,7 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    /** 最近开门记录卡：默认 3 行，点「全部」展开到 10 行。 */
+    /** 最近开门记录卡：默认 3 行，点「展开」一次展开到 {@link #RECORDS_EXPANDED} 行。 */
     private LinearLayout buildRecordsCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -939,13 +1019,14 @@ public class MainActivity extends Activity {
         title.setTextSize(12.5f);
         head.addView(title, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        recordsMoreTv = label("全部 ▸", 11, C_BLUE, true);
+        recordsMoreTv = label("展开 ▸", 11, C_BLUE, true);
         recordsMoreTv.setTextSize(11.5f);
         recordsMoreTv.setPadding(dp(12), dp(6), 0, dp(6));
         recordsMoreTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 recordsLimit = recordsLimit > DEFAULT_RECORDS ? DEFAULT_RECORDS
-                        : Math.min(OpenRecord.MAX, 10);
+                        : Math.min(OpenRecord.count(MainActivity.this), RECORDS_EXPANDED);
+                if (recordsLimit < DEFAULT_RECORDS) recordsLimit = DEFAULT_RECORDS;
                 renderRecords();
             }
         });
@@ -959,7 +1040,7 @@ public class MainActivity extends Activity {
         return card;
     }
 
-    /** 重画记录行：默认 3 行，展开后最多 10 行；空状态给一句说明而不是留白。 */
+    /** 重画记录行：默认 3 行，展开后最多 {@link #RECORDS_EXPANDED} 行；空状态给一句说明而不是留白。 */
     private void renderRecords() {
         if (recordsBox == null) return;
         recordsBox.removeAllViews();
@@ -1018,11 +1099,14 @@ public class MainActivity extends Activity {
 
         if (recordsMoreTv != null) {
             int total = OpenRecord.count(this);
-            if (total > recordsLimit) {
-                recordsMoreTv.setText("全部 ▸");
-                recordsMoreTv.setVisibility(View.VISIBLE);
-            } else if (recordsLimit > DEFAULT_RECORDS) {
+            // 旧判断是 total > recordsLimit 就显示「全部 ▸」：记录多于 10 条时
+            // 展开完仍是「全部 ▸」，永远看不到「收起 ▴」，而点了也只给 10 条（名不副实）。
+            // 现在按「当前是否展开」决定文案，两个状态各对应一个动作。
+            if (recordsLimit > DEFAULT_RECORDS) {
                 recordsMoreTv.setText("收起 ▴");
+                recordsMoreTv.setVisibility(View.VISIBLE);
+            } else if (total > DEFAULT_RECORDS) {
+                recordsMoreTv.setText("展开 ▸");
                 recordsMoreTv.setVisibility(View.VISIBLE);
             } else {
                 recordsMoreTv.setVisibility(View.GONE);
@@ -1207,8 +1291,11 @@ public class MainActivity extends Activity {
                     }
                     return true;
                 }
-                int max = (int) (decor.getHeight() * 0.30);
-                if (bottomSpacer != null && bottomSpacer.getHeight() > 0) {
+                // 横屏 / 分屏：可用高度本来就紧张，留白只会把开门按钮和记录卡推出屏幕。
+                // 直接归零让内容紧凑排布（整页已可滚动，宁可少一点「拇指弧」也不要把按钮藏起来）。
+                boolean landscape = decor.getWidth() > decor.getHeight();
+                int max = landscape ? 0 : (int) (decor.getHeight() * 0.30);
+                if (!landscape && bottomSpacer != null && bottomSpacer.getHeight() > 0) {
                     // 下方还有多少空间可让：让多少都不会把记录卡挤出屏幕
                     max = Math.min(max, lp.height + bottomSpacer.getHeight());
                 }
@@ -1232,12 +1319,23 @@ public class MainActivity extends Activity {
             notifyUser("请先登录（或点「重试连接」），再点门列表选门");
             return;
         }
+        if (doorListOpen) {
+            AppLog.i(AppLog.DOORS, "忽略重复点击：门列表浮层已打开");
+            return;
+        }
+        doorListOpen = true;
         doorListOnboarding = onboarding;
         AppLog.i(AppLog.DOORS, (onboarding ? "首次选门引导：自动" : "用户主动")
                 + "打开悬浮门列表 | session=" + AppLog.fp(Prefs.session(this)));
         Intent i = new Intent(this, DoorListActivity.class);
         i.putExtra(DoorListActivity.EXTRA_ONBOARDING, onboarding);
-        startActivityForResult(i, REQ_DOOR);
+        try {
+            startActivityForResult(i, REQ_DOOR);
+        } catch (Exception e) {
+            doorListOpen = false;
+            AppLog.w(AppLog.DOORS, "打开门列表失败：" + AppLog.stack(e));
+            notifyUser("打开门列表失败，请稍后重试");
+        }
     }
 
     /**
@@ -1262,6 +1360,39 @@ public class MainActivity extends Activity {
     }
 
     // ---------- 登录态切换 ----------
+
+    /** 11 位、以 1 开头、全为数字（输入法只限制键盘，粘贴可以塞进任何字符）。 */
+    private static boolean validPhone(String p) {
+        // 规则收敛到 core.Verify：纯函数、可被 run-tests.py 覆盖
+        return com.wb.qinlin.core.Verify.phone(p);
+    }
+
+    /** 短信验证码：4~8 位纯数字。放宽上下限是为了兼容上游日后改长度，不是放水。 */
+    private static boolean validSmsCode(String c) {
+        return com.wb.qinlin.core.Verify.smsCode(c);
+    }
+
+    /**
+     * 手机号不合格时的提示：长度、首位、字符集分开说。
+     * 旧实现一律提示「请输入 11 位手机号」，用户输满 11 位却以 2 开头时会觉得提示答非所问。
+     */
+    private static String phoneHint(String p) {
+        String issue = com.wb.qinlin.core.Verify.phoneIssue(p);
+        if (issue.startsWith("长度")) return "请输入 11 位手机号";
+        if (issue.equals("首位非 1")) return "手机号格式不正确：需以 1 开头";
+        return "手机号只能包含数字";
+    }
+
+    /** 返回字符串里数字字符的个数，用于「是否全为数字」判断。 */
+    private static int digitsOnly(String s) {
+        if (s == null) return 0;
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch >= '0' && ch <= '9') n++;
+        }
+        return n;
+    }
 
     private static String maskPhone(String p) {
         if (p == null || p.length() != 11) return p == null ? "" : p;
@@ -1299,6 +1430,17 @@ public class MainActivity extends Activity {
         }
         brandBox.setVisibility(logged ? View.GONE : View.VISIBLE);
         accountBox.setVisibility(logged ? View.VISIBLE : View.GONE);
+        // 开门区（门卡片）必须跟着登录态走：退出登录后旧账号的门名、在线状态和
+        // 红色开门按钮留在界面上，既是误导（点了也开不了），也泄露了上一个账号的信息。
+        if (openArea != null) {
+            openArea.setVisibility(logged ? View.VISIBLE : View.GONE);
+        }
+        // 主开门按钮同理：未登录时整屏最大的红色按钮没有意义，隐藏后登录表单更清爽
+        if (openBtn != null) {
+            openBtn.setVisibility(logged ? View.VISIBLE : View.GONE);
+            // 同步撤掉扩展热区：GONE 之后旧矩形仍会被 TouchDelegate 命中
+            if (!logged) clearOpenButtonHitArea();
+        }
         // 记录卡只对已登录用户有意义：未登录时开门按钮都按不了，留着只是占位
         if (recordsCard != null) {
             recordsCard.setVisibility(logged ? View.VISIBLE : View.GONE);
@@ -1306,11 +1448,24 @@ public class MainActivity extends Activity {
         if (versionFooter != null) {
             versionFooter.setVisibility(logged ? View.VISIBLE : View.GONE);
         }
+        // 未登录也能配组件：登录表单里没有门卡，入口只能独立出来。
+        // 只在「确实放过组件」时显示——没有组件时点进去只会看到空列表。
+        if (widgetCfgLink != null) {
+            boolean hasWidget = false;
+            if (!logged) {
+                try {
+                    hasWidget = OpenWidget.listInstalled(MainActivity.this).size() > 0;
+                } catch (Throwable t) {
+                    AppLog.w(AppLog.UI, "统计桌面组件失败：" + t);
+                }
+            }
+            widgetCfgLink.setVisibility(!logged && hasWidget ? View.VISIBLE : View.GONE);
+        }
         if (logged) {
             // N1：checkLogin 的 data 就是会话剩余有效期（真机实测 7776000 秒 = 90 天，滑动过期）。
             // 放在账号行而不是门卡底行：语义上属于「登录态」，宽度也够，不会被省略号截掉。
             String ttlText = Prefs.sessionTtlText(MainActivity.this);
-            boolean soon = Prefs.sessionTtlSeconds(MainActivity.this) < 30L * 86400L;
+            boolean soon = Prefs.sessionTtlRemainSeconds(MainActivity.this) < 30L * 86400L;
             accountTv.setText("● 已登录 · " + maskPhone(Prefs.phone(MainActivity.this))
                     + (ttlText.length() == 0 ? ""
                         : soon ? " · 凭证仅剩 " + ttlText : " · 凭证 " + ttlText));
@@ -1358,14 +1513,25 @@ public class MainActivity extends Activity {
         toast("正在重新检查登录状态…");
         new Thread(new Runnable() {
             @Override public void run() {
-                final boolean ok = SessionGuard.retry(c);
+                // 三态结果：只有 EXPIRED 才是「凭证真的失效」；
+                // 网络异常 / 网关给不出结论时不能吓唬用户去重新收短信。
+                final int r = SessionGuard.probeNow(c);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (!uiAlive()) return;
                         applyLoginState();
                         OpenWidget.refreshAll(MainActivity.this);
-                        toast(ok ? "登录状态已恢复，可以继续开门"
-                                : "服务端仍判定凭证失效（常见于官方 App 重新登录），请重新获取验证码登录");
+                        if (r == SessionGuard.OK) {
+                            toast("登录状态已恢复，可以继续开门");
+                        } else if (r == SessionGuard.NET_FAIL) {
+                            toast("网络异常，暂时无法确认登录状态，请稍后重试");
+                        } else if (r == SessionGuard.BIZ_REJECT) {
+                            toast("探活接口暂时不可用，请稍后重试（凭证仍保留）");
+                        } else if (r == SessionGuard.UNKNOWN) {
+                            toast("正在检查登录状态，请稍候再试");
+                        } else {
+                            toast("服务端仍判定凭证失效（常见于官方 App 重新登录），请重新获取验证码登录");
+                        }
                     }
                 });
             }
@@ -1467,6 +1633,10 @@ public class MainActivity extends Activity {
                 } catch (final Exception e) {
                     AppLog.e(AppLog.ERR, trace, "未捕获异常 " + AppLog.stack(e));
                     statusError("失败：" + e.getClass().getSimpleName() + " " + e.getMessage());
+                    // 网络层超时 / 断网抛的是原始 IOException，不是 ApiException，
+                    // 原先这个分支只写日志：用户对着「正在登录…」干等，既不知道失败也不会重试。
+                    // 用按异常类型映射的短提示（不直接用 e.getMessage()：里面可能带含 sessionId 的 URL）。
+                    toast(friendlyFailure(e));
                 } finally {
                     AppLog.unbind();
                 }
@@ -1508,88 +1678,138 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * 把网络层原始异常压成一句用户能懂的短提示。
+     * 映射规则统一放在 {@link Errors}（与门列表界面共用），避免两处文案漂移。
+     */
+    private static String friendlyFailure(Exception e) {
+        return Errors.fromException(e);
+    }
+
     private void doSendSms() {
-        final String phone = phoneEt.getText().toString().trim();
-        if (phone.length() != 11) {
-            AppLog.w(AppLog.LOGIN, "短信前置校验失败：手机号长度 " + phone.length());
-            notifyUser("请输入 11 位手机号");
+        if (sendingSms) {
+            AppLog.i(AppLog.LOGIN, "短信请求仍在途，忽略重复点击");
+            toast("验证码请求已发出，请稍候…");
             return;
         }
-        Prefs.setPhone(this, phone);
+        final String phone = phoneEt.getText().toString().trim();
+        if (!validPhone(phone)) {
+            AppLog.w(AppLog.LOGIN, "短信前置校验失败：手机号格式不合法（"
+                    + com.wb.qinlin.core.Verify.phoneIssue(phone) + "）");
+            notifyUser(phoneHint(phone));
+            return;
+        }
         if (!Net.online(this)) {          // 断网立刻提示，不等连接超时
             AppLog.w(AppLog.LOGIN, "请求短信被拦下：当前无网络（" + Net.describe(this) + "）");
             notifyUser("当前没有网络，请连接网络后重新获取验证码");
             return;
         }
+        // 刻意不在这里写 Prefs.phone：手机号代表「当前登录账号」，只有登录成功才落盘。
+        // 旧实现在请求短信时就覆盖手机号，导致 doLogin 里的换账号判断永远为 false（N1），
+        // 登录失败还会留下「手机号已换、凭证还是旧账号」的半状态。
+        sendingSms = true;
+        if (smsBtn != null) smsBtn.setEnabled(false);
         AppLog.i(AppLog.LOGIN, "请求短信验证码 | 手机号=" + AppLog.maskPhone(phone)
                 + " | 网络=" + Net.describe(this));
         async("正在请求短信验证码…", new Work() {
             @Override public void run() throws Exception {
-                QinlinApi.sendSms(phone);
-                AppLog.ok(AppLog.LOGIN, "短信请求已被接受，请查看验证码后点击「登录」");
+                try {
+                    QinlinApi.sendSms(phone);
+                    AppLog.ok(AppLog.LOGIN, "短信请求已被接受，请查看验证码后点击「登录」");
+                } finally {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            sendingSms = false;
+                            if (smsBtn != null) smsBtn.setEnabled(true);
+                        }
+                    });
+                }
             }
         });
     }
 
     private void doLogin() {
+        if (loggingIn) {
+            AppLog.i(AppLog.LOGIN, "登录仍在途，忽略重复点击");
+            toast("正在登录，请稍候…");
+            return;
+        }
         final String phone = phoneEt.getText().toString().trim();
         final String code = codeEt.getText().toString().trim();
-        if (phone.length() != 11) {
-            AppLog.w(AppLog.LOGIN, "登录前置校验失败：手机号长度 " + phone.length());
-            notifyUser("请输入 11 位手机号");
+        if (!validPhone(phone)) {
+            AppLog.w(AppLog.LOGIN, "登录前置校验失败：手机号格式不合法（"
+                    + com.wb.qinlin.core.Verify.phoneIssue(phone) + "）");
+            notifyUser(phoneHint(phone));
             return;
         }
-        if (code.length() == 0) {
-            AppLog.w(AppLog.LOGIN, "登录前置校验失败：验证码为空");
-            notifyUser("请输入验证码");
+        if (!validSmsCode(code)) {
+            AppLog.w(AppLog.LOGIN, "登录前置校验失败：验证码格式不合法（长度 " + code.length()
+                    + "，含非数字=" + (code.length() != digitsOnly(code)) + "）");
+            notifyUser(code.length() == 0 ? "请输入验证码" : "验证码应为 4~8 位数字");
             return;
         }
-        final String prevPhone = Prefs.phone(this);   // setPhone 之前抓一次，用来识别换账号
-        Prefs.setPhone(this, phone);
+        // 现在 phone 只在登录成功时写入，这里拿到的就是上一个账号，换账号判断才有效
+        final String prevPhone = Prefs.phone(this);
         if (!Net.online(this)) {
             AppLog.w(AppLog.LOGIN, "登录被拦下：当前无网络（" + Net.describe(this) + "）");
             notifyUser("当前没有网络，请连接网络后重新登录");
             return;
         }
+        loggingIn = true;
+        if (loginBtn != null) loginBtn.setEnabled(false);
         AppLog.i(AppLog.LOGIN, "开始登录 | 手机号=" + AppLog.maskPhone(phone)
                 + " | 验证码长度=" + code.length() + "（内容不记录）"
                 + " | 网络=" + Net.describe(this));
         async("正在登录…", new Work() {
             @Override public void run() throws Exception {
-                // 保留完整登录响应：除 sessionId 外可能还有长效凭证 / 续期票据，
-                // 字段名已由 QinlinApi 记进日志，原文只落本机、不上传。
-                org.json.JSONObject data = QinlinApi.loginDetailed(phone, code);
-                final String token = data.optString("sessionId", "").trim();
-                if (token.length() == 0) {
-                    throw new QinlinApi.ApiException("BAD_FORMAT", "登录响应缺少 sessionId");
-                }
-                Prefs.setSession(MainActivity.this, token);
-                Prefs.setLoginData(MainActivity.this, data.toString());
-                AppLog.ok(AppLog.LOGIN, "登录成功 | session=" + AppLog.fp(token)
-                        + " | 登录时openid=" + AppLog.fp(Prefs.openid(MainActivity.this))
-                        + " | 写入时间=" + AppLog.time(Prefs.sessionSavedAt(MainActivity.this)));
-                Prefs.setCommunityName(MainActivity.this, ""); // 重登时先清掉旧小区名
-                DoorCache.clear(MainActivity.this);            // 门列表缓存属于旧账号，一并清掉
-                AppLog.i(AppLog.LOGIN, "已清除旧小区名与门列表缓存，避免串号");
-                // 换手机号 = 换账号：旧门选择不能沿用，否则会去开别人的门
-                if (prevPhone.length() > 0 && !prevPhone.equals(phone)) {
-                    Prefs.clearDoor(MainActivity.this);
-                    AppLog.w(AppLog.LOGIN, "手机号变化（" + AppLog.maskPhone(prevPhone)
-                            + " → " + AppLog.maskPhone(phone) + "）：已清除旧账号的门选择，重新引导选门");
-                }
-                applyLoginState();  // 立刻把界面切成「已登录」：账号卡片 + 退出按钮（内部自带主线程切换）
-                refreshDoorLabel(); // 同步刷新门卡片的「会话保存于」为新凭证写入时间（同样线程安全）
-                toast("登录成功，凭证已更新");
-                statusOk("登录成功：凭证已更新并保存在本机。");
-                loadCommunityName(token);   // 只补小区名，门列表交给悬浮二级界面
-                // 首次登录（本机还没确认过要控制的门）→ 直接弹出选门浮层，选完再回主界面。
-                // onboardingShown 的复位放进主线程投递，避免后台写 / 主线程读的可见性缝隙。
-                runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        onboardingShown = false;
-                        maybeShowOnboarding();
+                try {
+                    // 保留完整登录响应：除 sessionId 外可能还有长效凭证 / 续期票据，
+                    // 字段名已由 QinlinApi 记进日志，原文只落本机、不上传。
+                    org.json.JSONObject data = QinlinApi.loginDetailed(phone, code);
+                    // 上游可能下发 "sessionId": null —— optString 会返回字符串 "null"，
+                    // 必须按「缺字段」处理，否则会把 "null" 当成真凭证落盘。
+                    final String token = QinlinApi.str(data, "sessionId", "").trim();
+                    if (token.length() == 0) {
+                        throw new QinlinApi.ApiException("BAD_FORMAT", "登录响应缺少 sessionId");
                     }
-                });
+                    // 换手机号 = 换账号：必须在写入新凭证之前判断，旧门选择不能沿用，
+                    // 否则会沿用上一账号的 cid/did 去开别人的门。
+                    final boolean switched = prevPhone.length() > 0 && !prevPhone.equals(phone);
+                    // 手机号 + 新凭证同一次提交：不再出现「手机号已换、凭证还是旧账号」的半状态
+                    Prefs.setLogin(MainActivity.this, phone, token);
+                    Prefs.setLoginData(MainActivity.this, data.toString());
+                    AppLog.ok(AppLog.LOGIN, "登录成功 | session=" + AppLog.fp(token)
+                            + " | 登录时openid=" + AppLog.fp(Prefs.openid(MainActivity.this))
+                            + " | 写入时间=" + AppLog.time(Prefs.sessionSavedAt(MainActivity.this)));
+                    Prefs.setCommunityName(MainActivity.this, ""); // 重登时先清掉旧小区名
+                    DoorCache.clear(MainActivity.this);            // 门列表缓存属于旧账号，一并清掉
+                    AppLog.i(AppLog.LOGIN, "已清除旧小区名与门列表缓存，避免串号");
+                    if (switched) {
+                        Prefs.clearDoor(MainActivity.this);
+                        AppLog.w(AppLog.LOGIN, "手机号变化（" + AppLog.maskPhone(prevPhone)
+                                + " → " + AppLog.maskPhone(phone) + "）：已清除旧账号的门选择，重新引导选门");
+                    }
+                    applyLoginState();  // 立刻把界面切成「已登录」：账号卡片 + 退出按钮（内部自带主线程切换）
+                    refreshDoorLabel(); // 同步刷新门卡片的「会话保存于」为新凭证写入时间（同样线程安全）
+                    toast("登录成功，凭证已更新");
+                    statusOk("登录成功：凭证已更新并保存在本机。");
+                    loadCommunityName(token);   // 只补小区名，门列表交给悬浮二级界面
+                    // 首次登录（本机还没确认过要控制的门）→ 直接弹出选门浮层，选完再回主界面。
+                    // onboardingShown 的复位放进主线程投递，避免后台写 / 主线程读的可见性缝隙。
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            onboardingShown = false;
+                            maybeShowOnboarding();
+                        }
+                    });
+                } finally {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            loggingIn = false;
+                            if (loginBtn != null) loginBtn.setEnabled(true);
+                        }
+                    });
+                }
             }
         });
     }
@@ -1705,9 +1925,9 @@ public class MainActivity extends Activity {
         }
         AppLog.i(AppLog.OPEN, trace, "网络就绪 → " + Net.describe(this) + "，开始下发开门指令");
 
-        // 凭证仍在但被服务端标记超时：与桌面小部件走同一条自动恢复路径，
-        // 探活成功就直接继续开门。之前 App 里要求手动点「重试连接」、
-        // 小部件却能自动恢复，同一状态「桌面能开、App 里不能开」，两边行为已统一。
+        // 凭证仍在但被服务端标记超时：先探活一次，恢复就直接继续开门（防御性路径）。
+        // 正常界面上按钮此时已随登录态隐藏，用户走的是「重试连接」；这里只是保证
+        // 万一从别的入口（无障碍、误触残留）调到 doOpen 时行为仍然正确。
         if (!Prefs.loggedIn(this)) {
             autoRecoverThenOpen(trace, clickAt);
             return;
@@ -1726,7 +1946,9 @@ public class MainActivity extends Activity {
         applyOpenButtonState(true, "恢复登录…");
         new Thread(new Runnable() {
             @Override public void run() {
-                final boolean ok = SessionGuard.retry(MainActivity.this);
+                // 三态：只有 EXPIRED 才是真失效，弱网/网关无结论不能提示「去重新登录」
+                final int r = SessionGuard.probeNow(MainActivity.this);
+                final boolean ok = r == SessionGuard.OK;
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (!uiAlive()) return;
@@ -1738,9 +1960,14 @@ public class MainActivity extends Activity {
                     AppLog.ok(AppLog.LOGIN, trace, "开门前探活成功 → 凭证恢复，继续开门");
                     startOpen(trace, clickAt);              // startOpen 自带主线程切换，后台调用安全
                 } else {
-                    AppLog.w(AppLog.OPEN, trace, "开门前探活未恢复 → 保持登录表单；可点「重试连接」或重新短信登录");
+                    AppLog.w(AppLog.OPEN, trace, "开门前探活未恢复 [" + r
+                            + "] → 保持登录表单；可点「重试连接」或重新短信登录");
                     finishOpen(false);
-                    notifyUser("登录已失效：凭证已保留，请点「重试连接」或重新登录");
+                    notifyUser(r == SessionGuard.EXPIRED
+                            ? "登录已失效：凭证已保留，请点「重试连接」或重新登录"
+                            : r == SessionGuard.NET_FAIL
+                                ? "网络异常，暂时无法确认登录状态，请稍后重试"
+                                : "正在检查登录状态，请稍后重试");
                 }
             }
         }, "session-auto-retry").start();

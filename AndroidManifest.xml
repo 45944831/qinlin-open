@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.wb.qinlin"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.1">
+
+    <!-- versionCode/versionName 只是「没有 git 可用时」的兜底：
+         正常构建由 build-apk.py 用版本参数注入（提交数 + 短 commit），
+         这样覆盖安装时系统里能看出是哪一版。 -->
+    <!-- 注意：XML 注释里不能出现连续两个连字符，改注释时别写命令行长参数 -->
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.INTERNET" />

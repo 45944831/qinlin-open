@@ -52,7 +52,13 @@ public final class AppLog {
     public static final String OK = "✓";    // 关键动作成功
 
     private static final String LOGCAT = "QinlinLog";
-    private static final int MAX_MEM = 400;          // 内存保留最近条数
+    /**
+     * 内存保留最近条数，同时也是日志页一次最多渲染的条数。
+     *
+     * <p>这两个数必须同源：入口写「共 {@code size()} 条」、页内写「最多 N 条」，
+     * 各自硬编码时会出现「入口 400、页内 300」的互相矛盾（2026-11-26 真机发现）。</p>
+     */
+    public static final int MEM_MAX = 400;
     private static final int MAX_FILE = 256 * 1024;  // 单个日志文件上限，超出轮转
     private static final int MAX_MSG = 1500;         // 单条消息上限
 
@@ -245,13 +251,25 @@ public final class AppLog {
                 trace == null || trace.length() == 0 ? "-" : trace, sanitize(msg));
         synchronized (LOCK) {
             MEM.add(e);
-            while (MEM.size() > MAX_MEM) MEM.remove(0);
+            while (MEM.size() > MEM_MAX) MEM.remove(0);
         }
         QUEUE.offer(e);   // 落盘 / logcat 交给后台写线程，调用线程立即返回
         for (Listener l : LISTENERS) {
             try { l.onLog(e); } catch (Exception ignored) {}
         }
     }
+
+    /**
+     * 只在后台写线程访问：常开的追加流。
+     *
+     * <p>旧实现每条日志 {@code new FileOutputStream(f, true)} + close 一次，
+     * 而一次开门会打 20~40 条日志 —— 也就是 20~40 次 open/write/close 系统调用。
+     * 写线程不卡 UI，但频繁 open 会带来可观的 IO 抖动与耗电，日志越密集越明显。
+     * 现在保持一个句柄、每条 flush（保证「刚写的日志立刻可导出」），
+     * 只有轮转 / 清空 / 写失败时才关闭重建。</p>
+     */
+    private static FileOutputStream stream;
+    private static File streamFile;
 
     /** 只在后台写线程执行：logcat + 追加落盘 + 轮转；与 clear 天然串行，无文件竞态。 */
     private static void writeEntry(Entry e) {
@@ -262,13 +280,28 @@ public final class AppLog {
         File f = file();
         if (f == null) return;
         try {
-            if (f.length() > MAX_FILE) rotate(f);
-            FileOutputStream os = new FileOutputStream(f, true);
-            os.write((line + "\n").getBytes("UTF-8"));
-            os.close();
+            if (stream != null && (!f.equals(streamFile) || f.length() > MAX_FILE)) {
+                closeStream();          // 文件换了（极少见）或该轮转了
+            }
+            if (stream == null) {
+                if (f.length() > MAX_FILE) rotate(f);
+                stream = new FileOutputStream(f, true);
+                streamFile = f;
+            }
+            stream.write((line + "\n").getBytes("UTF-8"));
+            stream.flush();
         } catch (Exception ignored) {
-            // 日志写入失败不能影响开门主流程
+            // 日志写入失败不能影响开门主流程；句柄可能已坏，丢掉让下一条重建
+            closeStream();
         }
+    }
+
+    /** 只在后台写线程调用（或由投递到该线程的 Runnable 调用）。 */
+    private static void closeStream() {
+        if (stream == null) return;
+        try { stream.close(); } catch (Exception ignored) {}
+        stream = null;
+        streamFile = null;
     }
 
     /**
@@ -291,7 +324,15 @@ public final class AppLog {
     }
 
     /**
-     * 兜底脱敏：即便上游原文或异常消息漏进了日志，也不会把凭证明文写进文件。
+     * 供网络层 / 界面复用的脱敏：与日志<b>同一套规则</b>。
+     *
+     * <p>旧实现里 {@code QinlinApi.redact()} 只抹 sessionId 与手机号，而日志这边还抹
+     * token / openid / smsCode / sign。结果同一条上游文案：写进日志是干净的，
+     * 直接 {@code status()} 到界面上却可能带着 token —— 而界面截图同样会外发。</p>
+     */
+    static String scrub(String s) { return sanitize(s); }
+
+    /** 兜底脱敏：即便上游原文或异常消息漏进了日志，也不会把凭证明文写进文件。
      * 手机号打码、JSON / KV 形式的凭证字段抹掉、换行拉平（一条日志一行）、超长截断。
      */
     private static String sanitize(String s) {
@@ -378,7 +419,7 @@ public final class AppLog {
         File old = new File(f.getAbsolutePath() + ".1");
         if (old.exists()) readLines(old, lines);
         if (f.exists()) readLines(f, lines);
-        int from = Math.max(0, lines.size() - MAX_MEM);
+        int from = Math.max(0, lines.size() - MEM_MAX);
         List<Entry> hist = new ArrayList<Entry>();
         for (int i = from; i < lines.size(); i++) {
             Entry e = Entry.parse(lines.get(i));
@@ -387,7 +428,7 @@ public final class AppLog {
         if (hist.isEmpty()) return;
         synchronized (LOCK) {
             MEM.addAll(0, hist);   // 历史更旧，插在本次启动日志之前
-            while (MEM.size() > MAX_MEM) MEM.remove(0);
+            while (MEM.size() > MEM_MAX) MEM.remove(0);
         }
     }
 
@@ -500,6 +541,9 @@ public final class AppLog {
                 .append(" | 在线=").append(Prefs.doorOnline(c));
         sb.append("\n小区名=").append(Prefs.communityName(c));
         sb.append("\n网络=").append(Net.describe(c));
+        // 凭证加密状态：Keystore 失效时会静默降级为明文（功能不受影响，但安全等级下降），
+        // 以前这条信息只有日志里一行，排障时看不到，现在直接进快照。
+        sb.append("\n凭证加密=").append(SecureStore.available() ? "Keystore 可用" : "已降级（明文回退）");
         DoorCache.Data cache = DoorCache.load(c);
         sb.append("\n门列表缓存=").append(cache == null
                 ? "无"
@@ -560,7 +604,6 @@ public final class AppLog {
         }
         return sb.toString();
     }
-
     /** 导出 txt：头部快照 + 磁盘上的完整历史（含轮转文件），跨重启 / 跨覆盖安装。 */
     public static String exportText(Context c) {
         flush();   // 导出前确保后台写入全部落盘，txt 内容与界面所见一致
@@ -601,6 +644,9 @@ public final class AppLog {
         // 文件操作也投递到同一个写线程，与 add() 严格串行，避免主线程与后台抢同一文件
         QUEUE.offer(new Runnable() {
             @Override public void run() {
+                // 必须先关掉常开句柄：句柄还开着时截断文件，后续写入会从旧偏移继续，
+                // 中间留下一大段 0 字节空洞（文件看着像坏了）。
+                closeStream();
                 File f = file();
                 if (f == null) return;
                 try {

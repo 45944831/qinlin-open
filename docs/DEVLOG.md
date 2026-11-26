@@ -1591,3 +1591,300 @@ v2+v3 签名通过；真机（示例设备 / 示例序列号）覆盖安装后�
   `noteResult()` 复位为 INVALID。`updateAll` 仍需重绘全部（清掉旧 busy + 写结果），但只有目标组件 busy。
   `inFlight()` 全局防连点保持不变（同一时刻只允许一个开门请求）。
 - 验证：aapt2 + javac（120 class）+ d8（168,848 字节）全通过。仍未打包、未安装、未提交。
+
+### 2026-11-26：修掉「上次开门结果」在多个组件间串扰 + 收敛协议版本常量
+- A1 串扰：开门结果 `w_last` 原为全局单值，`noteResult()` 写全局、`readState()` 所有组件共读，
+  导致点 A 组件开门后，绑不同门的 B/C 卡片「上次：…」也跟着变（与 11-18 修的 busy 串扰同类、当时漏掉）。
+  - 改法：`Prefs.widgetLast(c, appWidgetId)` / `setWidgetLast(c, appWidgetId, v)` 改为按 id 存
+    （键 `w_last_<id>`）；`noteResult()` 新增带 `appWidgetId` 的重载供小组件传被点 id，
+    App 内开门走原 5 参签名、传 INVALID → 不写桌面卡片（组件只反映通过它自己发生的开门）；
+    `readState()` 读各自的 id；`clearWidgetDoor()` 一并清 `w_last_<id>`。旧全局键不再读取，避免升级后继续串。
+- A2 常量：`5.2.6` / `3146` / `Dart/3.8` 原散落在 `deviceHeaders()` 与签名 `body.version` 两处，
+  漏改一处即触发 code 121。抽为 `VERSION_NAME` / `VERSION_CODE` / `USER_AGENT` 三个常量，
+  `qversionname` 与 `body.version` 共用 `VERSION_NAME`，从根本上杜绝脱节。零行为变化。
+- 验证：aapt2 + javac（120 class）+ d8（169,168 字节）全通过。未打包、未安装、未提交。
+
+### 2026-11-26（二）：P0 / P1 / P2 三项正确性修复（两路审查 + 逐条复核后落地）
+- P0 `keyBroken` 污染读路径（`SecureStore.decrypt`）：`encrypt()` 失败把 `keyBroken` 永久置 true，
+  而 `decrypt()` 也检查它 → 磁盘上完全健康的密文在本进程内全读不出，表现为「莫名掉登录、重启又恢复」。
+  修法：`decrypt()` 不再看 `keyBroken`，靠自身 try/catch 处理单条损坏；该标志只短路 `encrypt()` / `migrate()` 写入。
+- P1 App 内开门误清桌面防连点（`OpenWidget.noteResult`）：原先无条件 `inFlight=0` / `busyWidgetId=INVALID`。
+  修法：仅 `appWidgetId != INVALID`（组件自己触发）才复位并回写卡片；App 内开门若仍有桌面请求在飞，
+  `return` 跳过 `updateAll`，避免提前抹掉该组件的「开门中」视觉反馈、也避免重复下发开门指令。
+- P2 换账号漏清组件数据（`Prefs.clearSession` / `clearDoor`）：老代码只清全局 `w_last`，
+  按 id 的 `w_last_<id>` / `wd_<id>` 残留给下一账号。新增 `clearWidgetScopedData()` 按键前缀清理，
+  两个入口都调用；组件名/主题色属外观偏好、与账号无关，刻意保留。
+  （同日复核修正：`clearSession` 不再调用，只在换账号 `clearDoor` 时清——同账号退出重登不应丢组件绑门。）
+- 验证：aapt2 + javac（120 class）+ d8（169,436 字节）全通过。未打包、未安装、未提交。
+
+### 2026-11-26（三）：第八轮审查清单全量落地（N1–N7 + 中低 6 项）
+> 只改代码与文档；未打包、未安装、未提交/推送。
+
+**正确性（5 条）**
+- **N1 换账号清门分支不可达**：`doSendSms()` 在请求验证码时就写 `Prefs.phone`，导致 `doLogin()`
+  里 `prevPhone` 拿到的已是新号，`!prevPhone.equals(phone)` 恒 false，`clearDoor()` 永不执行。
+  修法：手机号改为「登录成功才落盘」，且与凭证在**同一次** SharedPreferences 提交里写入
+  （新增 `Prefs.setLogin(c, phone, token)`，删除单独的 `setPhone` / `setSession`）；
+  `switched` 在写盘前判定。顺带消除「手机号已换、凭证还是旧账号」的半状态。
+- **N2 登录/发短信无在途防护**：两个按钮原是局部变量，连点会并发登录；服务端按账号单会话，
+  旧响应后到会用已作废 token 覆盖新 session。修法：`sendingSms` / `loggingIn` 两个标志位 +
+  按钮 `setEnabled(false)`，`finally` 里在主线程复位（异常也会复位）。
+- **N3 JSON null 变字符串 "null"**：`org.json.optString(key, fallback)` 在字段值为 `JSONObject.NULL`
+  时返回 "null"。新增 `QinlinApi.str(o, key, fallback)`，替换 5 处：code/status、sessionId（最严重，
+  旧代码会把 "null" 当真凭证落盘）、message、communityName、doorControlName/doorName + online；
+  登录回调里的 `sessionId` 也改用它。
+- **N4 HTTP 401 不走 SESSION_EXPIRED**：`request()` 对非 200 一律抛 `HTTP_xxx`，`unwrap()` 的
+  `code==401` 分支对 HTTP 401 不可达，界面识别不出掉登录。修法：带 sessionId 的请求收到 401 时
+  直接抛 `SESSION_EXPIRED`，后续仍走 `expiredAfterRetry()` 二次确认，不误清凭证。
+- **N5 退出登录后开门区不隐藏**：`openArea` 从未 `setVisibility`，退出后仍显示上一账号的门名/
+  在线状态/红色开门按钮。修法：`applyLoginStateUi()` 里随登录态显示/隐藏。
+
+**探活链路（3 条）**
+- **N6 `probe()` 持锁做网络 IO**：原 `synchronized static probe` 内含 checkLogin(11s)+communityInfo(11s)，
+  最坏 22s，小部件广播预算约 10s。修法：锁只保护「防抖判定 + probing 占位」，网络 IO 全在锁外；
+  已有探活在跑时直接返回当前状态（不排队、不重复请求）。
+- **N7 三态压成布尔导致弱网误报**：`retry()` 返回 `probe==OK`，NET_FAIL/BIZ_REJECT 都是 false，
+  小部件据此弹「登录已失效」。修法：结果码公开（OK/EXPIRED/UNKNOWN/BIZ_REJECT/NET_FAIL），
+  新增 `probeNow()`；`OpenWidget.openNow`、`MainActivity.retrySession` / `autoRecoverThenOpen`
+  按结果码给不同文案（EXPIRED 才提示重新登录，网络异常只提示稍后重试）。
+- **探活结果不校验 token**：探活期间用户可能已重新登录，旧凭证的结论会污染新会话。
+  `probe()` 结束前比对 `Prefs.session()`，不一致即丢弃；`expiredAfterRetry()` 同样在确认前后比对。
+
+**中低（6 项）**
+- 门列表刷新无在途控制 → `DoorListActivity.loading`，连点只发一轮；`finally` 解锁。
+- 门列表回调无存活检查 → 新增 `alive`（`onDestroy` 置 false），所有 `runOnUiThread` 先判存活。
+- 组件名草稿丢失 → `WidgetConfigActivity.nameDrafts`（按 widgetId），`renderEditor` 优先恢复草稿，
+  保存后清除；`onResume`/切 Tab/换色/选门返回不再吃掉输入。
+- `EXTRA_FOCUS_ID` 未命中静默选第一个 → 改为明确提示「该小组件已不在桌面，已显示第一个」。
+- `AppLog.writeEntry` 写失败漏 fd → `finally` 显式 close。
+- `Net.online()` 语义矛盾 → `getActiveNetwork()==null` 时再看 `getAllNetworks()`：还有任意一块
+  具备 INTERNET 能力的网络就放行（网络切换空窗不误拦），一块都没有才返回 false。
+- 5xx 盲目换 4 种姿势 → `communities()` 遇 `HTTP_5xx` 立即停止重试（4xx 才可能是姿势不对）。
+- `doorsDetailed` 的 New 兜底吞 `SESSION_EXPIRED` → 兜底接口同样上抛。
+- `Prefs.openid()` check-then-act 并发 → `synchronized`。
+- `readAll` 无上限 → 4MB 上限，超限抛 `BODY_TOO_LARGE` 并断开连接（不把未读完的连接还池）。
+
+**验证**：javac `--release 8` 全量编译通过（124 class，含 R.java；仅 deprecation/serial 警告，无错误）。
+
+**独立复核后的修正（同日）**
+- 撤回「退出登录也清小组件绑门」：`clearSession()` 不再删 `wd_<id>` / `w_last_<id>`。
+  同一账号退出→重登很常见，清掉会让组件静默回落默认门（标签写「车库闸」却去开默认门）；
+  跨账号仍由 `doLogin` 的 `switched` 判断调用 `clearDoor()` 清理，不会串号。
+- 并发探活不再拿上次残留的 `session_expired` 冒充本次结论：改为在 `PROBE_LOCK` 上最多等 2 秒
+  拿对方真实结果，等不到才返回 `UNKNOWN`；结果写入 `lastProbeResult` 并 `notifyAll()`。
+- `expiredAfterRetry()` 在本机已无凭证时直接返回，不再写入 `session_expired=true`
+  （否则会出现一个永远点不好的「重试连接」入口）。
+- 未登录时同时隐藏主开门按钮（`openBtn`），与开门区一致；DEVLOG 原先只隐藏门卡片，与描述不符。
+- `WidgetConfigActivity` 改名保存后同步刷新顶部标签文字（标签原先只在 `makeTab` 时写一次）。
+
+### 2026-11-26（四）：第九轮审查「中等 6 项」全量落地
+> 只改代码与文档；未打包、未安装、未提交/推送。独立复核未发现严重回归。
+
+1. **通用网络异常无提示**（`MainActivity.async`）：超时 / 断网抛的是原始 `IOException`，
+   不是 `ApiException`，旧代码只写日志。新增 `catch` 里 `toast(friendlyFailure(e))`，
+   用 instanceof 映射成中文短提示；刻意不读 `getMessage()`（里面可能带含 sessionId 的 URL）。
+2. **未就绪按钮文案与指向不符**（`OpenWidget` 四种样式）：文案写「打开应用 / 登录」，
+   旧实现却绑定 `configIntent`（门列表），未登录用户进去只看到「未登录」死路。
+   新增 `guideIntent()`：未登录 → `MainActivity`（`appIntent()` 不再是死代码），已登录未选门 → 门列表。
+3. **在途锁 25s 短于开门最坏耗时**（`OpenWidget` + `WidgetOpenReceiver`）：
+   旧实现存时间戳 + 25s 兜底，弱网下探活(22s)+开门(20s) 最坏 42s，超过后连点被放行、
+   先完成的旧请求又把新请求的锁清掉，同一扇门收到多条指令。改为**代次锁**：
+   `AtomicLong SEQ` 递增，`markBusy()` 返回 seq，`finishRequest(c, seq)` 仅 seq 匹配才清锁；
+   `Receiver.finally` 无条件收尾（前置异常也复位）；兜底提到 60s。
+   `noteResult()` 不再清锁、也不再重绘 widget 卡片（避免旧请求的 MODE_NORMAL 晚于新请求的
+   MODE_BUSY、抹掉新请求「开门中」视觉），重绘统一由 `finishRequest` 在收尾时做一次。
+   `WidgetOpenReceiver` 新增 `INVALID_APPWIDGET_ID` 校验（无效 id 直接拒绝，避免锁卡满兜底）。
+4. **Net.online 漏判**：默认网络存在但无 INTERNET 能力（受限 WiFi / VPN）时旧代码直接 false，
+   不扫其它网络。改为默认网络可用才放行，否则遍历 `getAllNetworks()`，一块都没有才 false。
+5. **并发探活等待者未校验 token**（`SessionGuard`）：新增 `lastProbeToken` 与结论一起发布；
+   等待方拿到 `lastProbeResult` 前先比对 `token.equals(lastProbeToken)`，不一致返回 UNKNOWN
+   （探活期间用户重新登录时，旧凭证的 OK 不再放行新凭证的开门）。
+6. 复核后消除一次多余的全量刷新：widget 路径的卡片更新收拢到 `finishRequest` 单次执行。
+
+**验证**：javac `--release 8` 全量编译通过（124 class，退出码 0，仅 deprecation 警告）。
+
+### 2026-11-26（五）：第十轮审查「全部落地」（1 严重 + 9 中等 + 11 轻微）
+> 只改代码与文档；**未打包、未安装、未提交/推送**。
+
+**严重**
+1. **横屏 / 分屏下开门按钮被裁出屏幕且无法滚动**（`MainActivity.buildUi`）：`page` 是
+   `MATCH_PARENT` 的普通 LinearLayout，`configChanges` 又不重建 Activity，横屏时内容
+   650dp 塞进 350dp，按钮与下方记录卡整块被裁、页面不可滚。改为 `ScrollView` +
+   `fillViewport=true` 包住 `page`（竖屏视觉不变，横屏可滚）；`centerOpenButton()` 在
+   宽 > 高时把弹性留白上限压到 0，避免留白反过来把按钮推得更远。
+
+**中等**
+2. **开门记录缓存只写不读**（`OpenRecord`）：注释声称 `memCache` 让 `refreshStats()`
+   的 4~5 次读接口只读一次盘，`load()` 却从未读过它。改为命中即返回副本；`add()` 落盘
+   失败时置 `null` 强制重读；`clear()` 一并清缓存。
+3. **隐藏按钮的旧热区仍生效**（`MainActivity`）：`expandOpenButtonHitArea()` 在按钮
+   GONE 后 `getHitRect()` 仍返回旧矩形并继续 `setTouchDelegate`，登录表单空白处点击
+   会转到看不见的开门按钮（凭证超时态下经自动恢复真能开门）。改为非 VISIBLE 即
+   `setTouchDelegate(null)`，并在 `applyLoginStateUi()` 隐藏时立刻清一次。
+4. **全小区失败会抹掉可用缓存**（`DoorCache.fetch`）：`all` 为空仍 `save()`，且无条件覆盖
+   `cname`。改为「一个门都没读到 → 保留旧缓存与旧小区名，抛 COMMUNITY_FAILED」，
+   由界面走「失败 + 仍在显示上次缓存」。
+5. **网络失败被包成业务失败**（`QinlinApi.communities`）：新增 `netFail` 标记，抛
+   `NETWORK`（可重试的人话）；业务拒绝的逐项明细只进 `DIAG` 与日志，message 收敛成一句。
+   `DoorListActivity` 加 `friendlyCode()`，界面不再出现 `[COMMUNITY_FAILED]` 这类内部码。
+6. **success 盖掉 code**（`QinlinApi.unwrap`）：`code==0||200||success` 是「或」关系，
+   `success:true` 会绕过 401/121 的会话失效识别。改为「有 code 只认 code，无 code 才看
+   success」，并新增 `lenientTrue()` 兼容 `1` / `"true"` / `true`。
+7. **在途锁是进程级单值**（`OpenWidget` + `WidgetOpenReceiver`）：一屏两个组件时，
+   点 A 后 60 秒内点 B 100% 被静默丢弃。改为按 `appWidgetId` 分桶的
+   `INFLIGHT_SEQ` / `INFLIGHT_AT` / `BUSY_IDS`；`Receiver` 先取 id 再判锁。
+   同时新增 `PAINT_LOCK` 让「清锁+画正常态」与「加锁+画开门中」串行，
+   修掉上一轮遗留的「旧请求 NORMAL 盖掉新请求 BUSY」。
+8. **组件自动恢复不可达**（`OpenWidget`）：`s.ready` 要求已登录，未登录时按钮又绑
+   `guideIntent`，`openNow` 里那段探活恢复永远走不到。新增 `State.recoverable`
+   （有凭证 + 被标超时 + 绑了门）与 `openable()`；四种样式的按钮与配色改用 `openable()`，
+   文案提示「凭证已超时，点按尝试恢复登录后直接开门」。
+9. **日志页永远差一屏**（`LogActivity.render`）：`setText` 后立刻 `post(scrollToBottom)`，
+   读到的是上一批高度（首屏为 0，`maxScroll()` 直接返回）。改为
+   `OnGlobalLayoutListener` 布局完成后再滚 + 一次 `post` 兜底，`scrollAfterLayoutPending`
+   去重。
+10. **解密失败静默回退默认门**（`SecureStore` + `OpenWidget.boundDoor`）：`get()` 解密失败
+    静默返回 `def`，组件绑门读不出来就悄悄回落全局默认门 —— 卡片写着 A 门、点下去开 B 门。
+    改为：`SecureStore` 对每个失败字段只记一次日志；`Prefs.hasWidgetDoor()` 区分
+    「主动解绑（空串）」与「密文非空但读不出来」，后者标 `BoundDoor.broken`，
+    不回退默认门、卡片显示「门绑定已失效 / 请重新选门」。
+
+**轻微**
+11. `OpenRecord.trim()` 90 天截断：整份会被删光时（系统时间前调）保留最近 10 条并告警；
+    `save()` 回退路径先备份 `.bak` 再覆盖，避免写一半丢全部历史。
+12. `LogActivity` / `WidgetConfigActivity` 补 `onConfigurationChanged()` 重算浮层窗口尺寸，
+    横屏后「✕ 关闭」不再被顶出屏幕。
+13. `Net` 抽出 `pick()`，`online()` 与 `describe()` 共用同一判断，不再出现
+    「判定有网、描述说无网络」。
+14. `Prefs` 新增 `sessionTtlRemainSeconds()`，`sessionTtlText()` 按实际流逝时间衰减
+    （不再把 80 天前探活的「90 天」一直显示成 90 天）；`sessionTtlAt` 从此有调用方。
+15. 记录卡「全部 ▸ / 收起 ▴」按「当前是否展开」决定文案，展开上限 10 → 20：
+    记录多于 10 条时不再出现「点了全部、看到的不是全部、也永远收不起来」。
+16. 门列表 / 组件设置入口加 `doorListOpen` / `widgetCfgOpen` 防重复启动（与日志弹窗一致），
+    启动失败复位。
+17. 登录输入：手机号校验 11 位 + 首位 1 + 全数字，验证码校验 4~8 位纯数字；
+    两个输入框加 `LengthFilter`（粘贴超长直接截断）。
+18. `AppLog.scrub()` 对外复用，`QinlinApi.redact()` 改为调用它：界面 `status()` 与日志
+    现在共用同一套脱敏（token / openid / smsCode / sign 不再只在日志里被抹掉）。
+19. `build-apk.py`：不再在构建开头删除 `qinlin-open.apk`；签名先写 `signed.apk`、
+    `verify` 通过后 `os.replace` 原子替换 —— 构建中途失败仍保留上一份可用包。
+    子进程输出按 UTF-8 → GBK 依次尝试解码，中文 Windows 上的 javac 报错不再乱码。
+
+**验证**：javac `--release 8` 全量编译通过（125 class，退出码 0，仅 deprecation 警告）；
+`build-apk.py` 语法检查通过。**未打包 / 未安装 / 未提交 / 未推送。**
+
+### 2026-11-26（六）：六维工程审查「全部落地」（正确性 / 可维护性 / 安全 / 性能 / 可测试性 / 依赖兼容）
+> 只改代码与文档；**未打包、未安装、未提交/推送**。
+
+**安全**
+1. **导出的 AppWidget provider 不校验入站广播**（`OpenWidget.onReceive`）：4 个 provider 都是
+   `exported=true`，第三方可用显式广播直达（Android 7+ 只拦隐式）。新增两道闸门：
+   ① 除删除外，`EXTRA_APPWIDGET_IDS` 必须与本 provider 实际拥有的实例求交集（顺带天然裁掉超大数组，
+   防 onUpdate 主线程循环造成 ANR）；② `ACTION_APPWIDGET_DELETED` 单独处理：只校验发送方 uid
+   （system / root / 本应用）并把数组去重限长到 64，**不与自有 id 求交集** —— 广播送达时该 widget
+   往往已从系统列表消失，求交集会让清理逻辑永远不执行、`wd_/wn_/wc_` 残留给下一个复用同 id 的组件。
+   刻意不拦 `ACTION_APPWIDGET_UPDATE`：它只是重画，无副作用，而个别第三方启动器会自己补发，
+   一律拦掉会让组件停更。
+2. **凭证加密加 AAD**（`SecureStore`）：新增 `enc:v2:` 格式，把**字段名**作为 AAD 参与完整性校验，
+   密文被搬到别的键（或用同一把密钥解另一字段）会解密失败。`enc:v1:` 继续可读，启动迁移时自动升级为 v2。
+   另外「读到非密文」时每个字段记一次日志，避免「以为加密了其实还是明文」。
+3. **剪贴板隐私提示**（`LogActivity`）：Android 9 及以下任何前台应用都能读剪贴板，第一次复制前弹窗说明并给「导出文件」替代项。
+   `复制全部`（512KB 磁盘历史）改为 `复制最近`（内存 200 条 + 头部快照），体积可控、更适合贴进聊天。
+
+**正确性**
+4. **组件开门时间预算不自洽**：`goAsync` 窗口约 10 秒，而开门默认 5s+15s、探活 5s+6s，最坏 31 秒。
+   新增小部件专用预算 `WIDGET_CONNECT_MS=2500 / WIDGET_READ_MS=5000`、探活 2500/3000，
+   `openDoorQuick` / `probeNowQuick` / `expiredAfterRetryQuick` 三条路径；看门狗 8s → 10s 并记录耗时。
+5. **进程被回收后卡片永久停在「开门中」**：`finishRequest` 不会执行。新增落盘「尝试标记」
+   `<进程标签>|<开始时间>`（`Prefs.widgetAttempt`）：进程标签不同（重启过）或超过 60 秒，
+   渲染时判定为「上次没收到结果，可重试」，而不是一直等。
+6. **在途状态被任何一次 NORMAL 重绘抹掉**：`s.busy` 改为只看 `isBusy(id)`，不再看本次 mode。
+   旧写法下 App 回前台触发 `refreshAll` 会把正在飞的组件画成空闲，用户会去点第二次。
+7. **门列表缓存的失败语义**（`DoorCache.fetch`）：① 全部小区失败时区分 `NETWORK`（`IOException`）
+   与 `COMMUNITY_FAILED`，不再一律当网关拒绝；② **部分**小区失败时用旧缓存把这些小区的门补回来，
+   而不是用「本次成功子集」整体覆盖 —— 弱网下门不会从列表里「消失」。
+8. **换姿势兜底基本没生效**（`QinlinApi.communities`）：旧实现对任何非 `HTTP_` 业务码直接 break，
+   而网关对 body 格式问题很可能回业务码。改为 `shapeRetryable()`：4xx(400/404/405/415) 或
+   `QINLIN_REJECTED` / `BAD_FORMAT` 才继续换姿势，其余立即停。
+9. **小区列表最坏 80 秒**：加 25 秒总预算，超时按「可重试的网络问题」收尾。
+10. **`Net` 判「有网」≠「能上网」**：`pick()` 分两轮，先找 `VALIDATED`，一圈没有才接受只有 `INTERNET` 的
+    网络。Portal 认证 WiFi / 空壳热点不会再「判定有网然后吃满超时」，仍然 fail-open。
+
+**性能**
+11. **日志每条 open/close 一次文件**：改为常开句柄 + 每条 flush（一次开门 20~40 条 → 1 次 open），
+    轮转 / 清空 / 写失败时才关闭重建。`clear()` 先关句柄再截断，避免留下空洞。
+12. **组件重绘全量**：`markBusy` / `finishRequest` 改为 `updateOne(id)`，只重建被点的那一个；
+    找不到实例时退化为全量。
+13. `OpenRecord.todayCount()` 复用同一个 `Calendar`（旧实现每条记录 new 一个）。
+
+**可维护性**
+14. **新增 `src/com/wb/qinlin/core/`**（不 import android.*）：`Verify`（手机号 / 验证码 / TTL 衰减）、
+    `Text`（按码点截断 / 缩短）。`Prefs.sessionTtlRemainSeconds`、`Prefs.limitWidgetName`、
+    `MainActivity.validPhone/validSmsCode` 全部改为委托，规则只剩一份。
+15. **新增 `Errors`**：`MainActivity.friendlyFailure` 与 `DoorListActivity.friendlyCode` 合并成一份
+    （`fromException` / `prefixFromCode`）。前缀只给「原文不像人话」的码加，避免
+    「网络异常 · 网络异常，读不到门列表…」这种重复。
+16. 四种版式的按钮绑定收敛为 `bindOpenButton()`（原来同一段三元表达式抄了四遍）。
+17. 死代码：`SecureStore.available()` 接入诊断快照（显示「Keystore 可用 / 已降级」）；
+    `AppLog.recentText()` 接入「复制最近」。
+
+**可测试性**
+18. **新增 `tests/CoreSelfTest.java` + `run-tests.py`**：零依赖（只要 JDK），覆盖 33 条用例 ——
+    手机号字符集（全角 / 空格 / 中文数字）、验证码长度、TTL 衰减（含时间回拨与恰好到期）、
+    emoji 按码点截断。`python run-tests.py` 一条命令跑完。
+19. `ApiException` 补 `serialVersionUID`（消掉一条编译告警）。
+
+**依赖与兼容**
+20. **构建脚本参数化**（`build-apk.py`）：`JAVA_HOME` / `ANDROID_SDK_ROOT` / `ANDROID_BUILD_TOOLS` /
+    `QINLIN_KEYSTORE` 环境变量，找不到就自动搜索（PATH 的 javac、SDK 下最新 build-tools），
+    换机器不用改代码；缺什么会一次列全并给出提示。
+21. **版本号注入**：`--replace-version --version-code <提交数> --version-name 1.1-<短 commit>`，
+    可用 `QINLIN_VERSION_CODE/NAME` 覆盖。旧包 `versionCode` 一直是 1，十几轮改动在系统里看不出来。
+    Manifest 兜底值改为 `2 / 1.1`（无 `.git` 的源码包用）。
+22. 首次生成 keystore 时打印**备份警告**（丢失即无法覆盖升级），README 同步补充。
+
+**验证**：javac `--release 8` 全量编译通过（**128 class，退出码 0**，7 条既有 deprecation 警告，无新增）；
+`python run-tests.py` → **PASS 33 / FAIL 0**；`build-apk.py` 语法与路径解析验证通过，
+`aapt2 link` 的版本注入参数已确认支持 `--replace-version`。
+**未打包 / 未安装 / 未提交 / 未推送。**
+
+**这轮刻意没做（连同原因）**
+- `MainActivity`（1996 行）/ `QinlinApi`（971 行）整体拆分：纯机械搬迁，但涉及几十个 View 字段，
+  没有真机回归的前提下收益 < 风险；已先抽出 `core` / `Errors` 两个低耦合边界，为后续拆分铺路。
+- 204 处中文文案迁 `strings.xml`：单语言自用项目，纯机械改动且无法用编译验证漏改。
+- adaptive icon / 小组件 `previewImage`：需要位图资源（本机无图像库），且 API 31+ 已用 `previewLayout`。
+- `targetSdk` 升 34/35：会引入前台服务类型、BAL 等行为变更，必须真机验证后再动。
+
+### 2026-11-26（七）：真机测试发现的两处小问题
+
+真机（Redmi K40 / Android 13）跑完登录态全流程后，修掉其中两条。
+
+1. **组件读屏描述是 `qinlinnull`**：桌面把「应用名 + 组件根 `contentDescription`」直接字符串拼接，
+   组件不设描述时拼出来就是 `qinlinnull`。新增 `applyA11y()` 按状态给一句人话
+   （`快捷开门 · 2栋单元门，可开门` / `正在开门` / `未登录`），描述里不再重复应用名、
+   开头留一个空格，让拼接结果自然；4×2 / 4×1 的根是不可点击容器，只说状态不说「点按」，
+   避免读屏用户双击容器没反应。`RemoteViews.setContentDescription` 是 **API 31** 才有的方法，
+   用 `SDK_INT >= S` 守住，低版本维持原样。
+2. **日志条数自相矛盾**：入口写「共 400 条」（读 `AppLog.size()`，内存上限 400），
+   页内写「最多 300 条」（硬编码 `MAX_LINES = 300`）。把内存上限提为 `AppLog.MEM_MAX`（public），
+   页内 `MAX_LINES` 直接引用它，页脚文案改成「当前显示 X 条 / 共 N 条」——两个数从此只有一个来源。
+
+**验证**：javac `--release 8` 全量编译 **130 class、退出码 0**；`run-tests.py` PASS 33 / FAIL 0。
+**未打包 / 未安装 / 未提交**（需重新打包才能在真机上看到读屏描述与日志条数的变化）。
+
+### 2026-11-26（八）：未登录真机测试暴露的三处问题
+
+在 OPPO PEYM00（Android 13）上从零安装、不登录跑了一遍，修掉三条。
+
+1. **手机号提示答非所问**：输入 11 位但在 `23800138001`（非 1 开头）时仍提示「请输入 11 位手机号」。
+   `core/Verify` 新增 `phoneIssue()`，把原因拆成「长度 N / 首位非 1 / 含非数字」，
+   登录与发码两处按原因给提示（「请输入 11 位手机号」/「需以 1 开头」/「只能包含数字」），
+   `Verify.phone()` 改为 `phoneIssue().isEmpty()`，规则仍只有一处。自检补 5 例（共 38 例）。
+2. **入口与页内条数差 1**：主界面写「共 N 条」，点进日志页变成 N+1——因为打开日志页自身写了一条
+   「打开分类日志弹窗」。移除该行：查看日志不应该改变日志本身，两个数字从此一致。
+3. **未登录进不去组件设置**：入口原本只挂在门卡底部，而门卡在未登录时整块隐藏，
+   导致没登录就改不了组件名 / 主题色 / 绑门。主界面补一个独立入口
+   「组件设置（改名 / 换色 / 绑门）▸」，只在「未登录 + 桌面确实已放组件」时出现
+   （`OpenWidget.listInstalled()` 判空），新用户首屏不受影响。
+
+**验证**：javac `--release 8` 全量编译 **131 class、退出码 0**；`run-tests.py` **PASS 38 / FAIL 0**。

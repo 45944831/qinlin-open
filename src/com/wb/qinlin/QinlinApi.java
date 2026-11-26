@@ -38,6 +38,12 @@ public final class QinlinApi {
     private static final byte[] PHONE_KEY = hexToBytes("FBC213C4C7BEEBD2AA4EDBF0F681C41B");
     private static final String SIGN_SUFFIX = "key=qiAnlPinP";
 
+    // 协议版本头：deviceHeaders() 与签名 body 必须取同一份值，否则签名不匹配（code 121）。
+    // 对齐 QinlinOpen 已验证的 5.2.6/3146；官方 5.3.x 无开源验证，不追。
+    private static final String VERSION_NAME = "5.2.6";
+    private static final String VERSION_CODE = "3146";
+    private static final String USER_AGENT = "Dart/3.8 (dart:io)";
+
     private static final SecureRandom RND = new SecureRandom();
 
     /**
@@ -49,9 +55,30 @@ public final class QinlinApi {
     static final int PROBE_CONNECT_MS = 5000;
     static final int PROBE_READ_MS = 6000;
 
+    /**
+     * 桌面小部件路径的开门预算：{@code goAsync()} 的广播窗口约 10 秒。
+     *
+     * <p>默认的 5s 连接 + 15s 读 = 20 秒，单是开门一项就超过窗口；进程在窗口结束后
+     * 可能被回收，{@code finishRequest} 不执行，卡片就会永久停在「开门中…」。
+     * 这里压到 2.5s + 5s（最坏 7.5 秒）——正常 RTT 只有 0.3~0.6 秒，余量仍然充足。
+     * 应用内开门不受影响，继续用「宁可多等」的默认超时。</p>
+     */
+    static final int WIDGET_CONNECT_MS = 2500;
+    static final int WIDGET_READ_MS = 5000;
+    /** 小部件路径的探活预算：最多再花 2.5s + 3s，给后面的开门留出窗口。 */
+    static final int WIDGET_PROBE_CONNECT_MS = 2500;
+    static final int WIDGET_PROBE_READ_MS = 3000;
+
+    /**
+     * 小区列表的总时间预算。4 种请求姿势串行、每种 5s 连接 + 15s 读，最坏 80 秒，
+     * 那时用户早就退出门列表页了，线程还在后台空转。超过预算就收手并给出可重试的结论。
+     */
+    private static final long COMM_TOTAL_BUDGET_MS = 25000L;
+
     private QinlinApi() {}
 
     public static class ApiException extends Exception {
+        private static final long serialVersionUID = 1L;
         public final String code;
         public ApiException(String code, String message) {
             super(message);
@@ -197,14 +224,13 @@ public final class QinlinApi {
         LinkedHashMap<String, String> h = new LinkedHashMap<String, String>();
         h.put("qvendor", "Xiaomi");
         h.put("openid", openid());
-        // 版本头对齐到 QinlinOpen 已验证的 5.2.6/3146（与本项目同一套 salt/key/接口），
-        // 比旧的 4.9.3/3113 更贴近当前官方，降低被当作陈旧客户端区别对待的风险。
-        // 官方 5.3.2=3152 尚未在开源实现中验证过，暂不采用；qchannel/qvendor 涉及风控指纹，保持历史验证值不动。
-        h.put("qversioncode", "3146");
-        h.put("qversionname", "5.2.6");
+        // 版本头取自顶部常量（与签名 body.version 同一份 VERSION_NAME），改一处即全生效。
+        // 对齐 QinlinOpen 已验证的 5.2.6/3146；qchannel/qvendor 涉及风控指纹，保持历史验证值不动。
+        h.put("qversioncode", VERSION_CODE);
+        h.put("qversionname", VERSION_NAME);
         h.put("qchannel", "xiaomi");
         h.put("qplatform", "0");
-        h.put("user-agent", "Dart/3.8 (dart:io)");
+        h.put("user-agent", USER_AGENT);
         return h;
     }
 
@@ -269,13 +295,62 @@ public final class QinlinApi {
         return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 
+    /**
+     * 取字符串字段，把 JSON 的 null 当成「字段不存在」。
+     *
+     * <p>org.json 的 {@code optString(key, fallback)} 在字段值是 {@code JSONObject.NULL}
+     * 时返回字符串 {@code "null"} 而不是 fallback。上游只要下发一个 {@code "sessionId": null}，
+     * 旧代码就会把 "null" 当成真凭证写进本机；门名/小区名也会显示成 "null"。</p>
+     */
+    public static String str(JSONObject o, String key, String fallback) {
+        if (o == null || key == null || !o.has(key)) return fallback;
+        Object v = o.opt(key);
+        if (v == null || v == JSONObject.NULL) return fallback;
+        String s = String.valueOf(v);
+        return "null".equals(s) ? fallback : s;
+    }
+
+    /**
+     * 宽松布尔：上游有的接口给 {@code true}，有的给 {@code 1} 或 {@code "true"}。
+     * {@code JSONObject.optBoolean()} 只认真正的 JSON 布尔，数字/字符串一律返回 false，
+     * 会把「成功」误判成「失败」。这里三种写法都认。
+     */
+    private static boolean lenientTrue(Object v) {
+        if (v == null || v == JSONObject.NULL) return false;
+        if (v instanceof Boolean) return ((Boolean) v).booleanValue();
+        if (v instanceof Number) return ((Number) v).intValue() == 1;
+        String s = String.valueOf(v).trim();
+        return "true".equalsIgnoreCase(s) || "1".equals(s) || "ok".equalsIgnoreCase(s);
+    }
+
+    /** 单次响应体上限：正常业务响应只有几 KB，超过这个量级说明上游异常，继续读只会 OOM。 */
+    private static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+
     private static String readAll(InputStream in) throws Exception {
         if (in == null) return "";
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] buf = new byte[4096];
         int n;
-        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
-        in.close();
+        boolean truncated = false;
+        try {
+            while ((n = in.read(buf)) != -1) {
+                if (out.size() + n > MAX_BODY_BYTES) {
+                    out.write(buf, 0, MAX_BODY_BYTES - out.size());
+                    truncated = true;
+                    break;
+                }
+                out.write(buf, 0, n);
+            }
+        } finally {
+            try { in.close(); } catch (Exception ignored) {}
+        }
+        if (truncated) {
+            // 截断后的 JSON 必然解析失败，留着半截文本没有意义；直接判定失败并断开连接，
+            // 避免把「还有未读数据」的连接交还连接池。
+            AppLog.w(AppLog.NET, "⚠ 响应体超过 " + MAX_BODY_BYTES + " 字节上限，放弃解析（上游可能异常）");
+            throw new ApiException("BODY_TOO_LARGE",
+                    "上游响应超过 " + (MAX_BODY_BYTES / 1024 / 1024) + "MB 上限，已放弃解析");
+        }
         return new String(out.toByteArray(), "UTF-8");
     }
 
@@ -333,6 +408,18 @@ public final class QinlinApi {
                 // 5xx 的真实原因常在 exception / error 里，别只报一句 HTTP 500
                 String detail = upstreamDetail(text);
                 AppLog.e(AppLog.NET, "HTTP 非 200，本次请求判定失败 | 原因=" + shorten(detail, 240));
+                // 带凭证的请求被回 401，等价于「会话已失效」：以前只抛 HTTP_401，
+                // unwrap() 里 code==401 的分支永远走不到，界面也就不会识别成掉登录，
+                // 表现为「登录态还在但什么都读不出来」。这里统一成业务错误码，
+                // 后续仍由 SessionGuard.expiredAfterRetry() 做二次确认，不会误清凭证。
+                if (status == 401 && params != null) {
+                    String sid = params.get("sessionId");
+                    if (sid != null && sid.length() > 0) {
+                        AppLog.w(AppLog.LOGIN, "HTTP 401 + 已带凭证 → SESSION_EXPIRED（等待二次确认）");
+                        throw new ApiException("SESSION_EXPIRED",
+                                "qinlin网关返回 HTTP 401：凭证已失效，请重新短信登录");
+                    }
+                }
                 throw new ApiException("HTTP_" + status,
                         "上游 HTTP " + status + "：" + detail);
             }
@@ -359,10 +446,18 @@ public final class QinlinApi {
             AppLog.e(AppLog.NET, "响应格式异常 BAD_FORMAT | " + shorten(redact(text), 160));
             throw new ApiException("BAD_FORMAT", "上游返回格式异常：" + redact(text));
         }
-        String code = o.optString("code", o.optString("status", ""));
-        boolean ok = code.equals("0") || code.equals("200") || o.optBoolean("success", false);
+        // 上游可能下发 code/status: null —— optString 会返回字符串 "null"，这里按缺省处理
+        String code = str(o, "code", str(o, "status", ""));
+        boolean hasCode = code.length() > 0;
+        // code 与 success 必须是「主从」而不是「或」：
+        // 旧写法 code==0 || code==200 || optBoolean("success") 会让 success:true 盖掉
+        // code=401/121，直接跳过会话失效识别——凭证明明被判超时，界面却报成普通业务失败。
+        // 现在：给了 code 就只认 code；没给 code 才看 success（并兼容 1 / "true"）。
+        boolean ok = hasCode
+                ? (code.equals("0") || code.equals("200"))
+                : lenientTrue(o.opt("success"));
         AppLog.i(AppLog.NET, "业务解析 code=" + code
-                + " | success=" + o.optBoolean("success", false)
+                + " | success=" + String.valueOf(o.opt("success"))
                 + " | 摘要=" + shorten(redact(text), 160));
         // 官方客户端有 _updateCacheSessionId，疑似服务端会轮换/下发新票据。
         // 先只留痕不自动替换：真机导出日志确认字段名后再决定是否跟随，避免误换凭证。
@@ -422,7 +517,7 @@ public final class QinlinApi {
         TreeMap<String, String> body = new TreeMap<String, String>(fields);
         body.put("timestamp", String.valueOf(System.currentTimeMillis()));
         body.put("nonce", String.valueOf(RND.nextInt(90000) + 10000));
-        body.put("version", "5.2.6");   // 与 deviceHeaders().qversionname 一致（对齐已验证的 QinlinOpen 协议）
+        body.put("version", VERSION_NAME);   // 与 deviceHeaders().qversionname 同一常量，绝不脱节
 
         TreeMap<String, String> signed = new TreeMap<String, String>();
         signed.put("token", token == null ? "" : token);
@@ -497,7 +592,7 @@ public final class QinlinApi {
 
     /** 验证码登录，返回 sessionId。 */
     public static String login(String phone, String code) throws Exception {
-        String token = loginDetailed(phone, code).optString("sessionId", "").trim();
+        String token = str(loginDetailed(phone, code), "sessionId", "").trim();
         if (token.length() == 0) {
             throw new ApiException("BAD_FORMAT", "登录响应缺少 sessionId");
         }
@@ -516,9 +611,14 @@ public final class QinlinApi {
      * 且小部件路径的广播前台时限只有约 10 秒，预算必须留给开门请求。
      */
     public static int checkLogin(String token) throws Exception {
+        return checkLogin(token, PROBE_CONNECT_MS, PROBE_READ_MS);
+    }
+
+    /** 带超时预算的探活：小部件路径用更短的预算（见 {@link #WIDGET_PROBE_READ_MS}）。 */
+    static int checkLogin(String token, int connectMs, int readMs) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
         Object data = post("/api/app/v1/checkLogin", f, token, "json", true,
-                PROBE_CONNECT_MS, PROBE_READ_MS);
+                connectMs, readMs);
         // 2026-11-16 真机实测：data = 7776000，正好 90 天整 → 会话滑动过期窗口（秒）。
         // 以前返回 void 把它丢了；现在解析出来，界面与日志都能看到「凭证还剩多久」。
         int ttl = -1;
@@ -546,14 +646,13 @@ public final class QinlinApi {
      */
     private static final ThreadLocal<String> RAW = new ThreadLocal<String>();
 
-    /** 只保留结构，抹掉凭证和手机号，避免诊断输出泄露敏感信息。 */
+    /**
+     * 只保留结构，抹掉凭证和手机号，避免诊断输出泄露敏感信息。
+     * 直接复用日志层的同一套规则：界面显示（status）与日志落盘必须一样干净。
+     */
     private static String redact(String s) {
         if (s == null) return "";
-        s = s.replaceAll("\"sessionId\"\\s*:\\s*\"[^\"]*\"", "\"sessionId\":\"***\"");
-        // 数字边界：避免把 13 位毫秒时间戳当成手机号切掉
-        s = s.replaceAll("(?<!\\d)1[3-9]\\d{9}(?!\\d)", "***PHONE***");
-        s = s.replace('\n', ' ').replace('\r', ' ');
-        return s.length() > 3000 ? s.substring(0, 3000) + "…(截断)" : s;
+        return AppLog.scrub(s);
     }
 
     /**
@@ -564,10 +663,10 @@ public final class QinlinApi {
      */
     private static String reason(JSONObject o) {
         StringBuilder sb = new StringBuilder();
-        String msg = o.optString("message", o.optString("msg", ""));
+        String msg = str(o, "message", str(o, "msg", ""));
         if (msg.length() > 0 && !"No message available".equalsIgnoreCase(msg)) sb.append(msg);
-        appendField(sb, "exception", o.optString("exception", ""));
-        appendField(sb, "error", o.optString("error", ""));
+        appendField(sb, "exception", str(o, "exception", ""));
+        appendField(sb, "error", str(o, "error", ""));
         return sb.toString().trim();
     }
 
@@ -626,6 +725,26 @@ public final class QinlinApi {
         return e instanceof java.io.IOException;
     }
 
+    /**
+     * 这次失败是否「像请求姿势不对」，值得换一种 body 形式再试。
+     *
+     * <p>判据：网关明确回了 4xx（400/404/405/415 —— 路径、方法或 body 类型不被接受），
+     * 或者业务层回了一个「未接受请求 / 格式异常」。其余业务码（签名被拒 121、
+     * 无权限、门不存在…）换 body 形式不会变好，继续串行只是白等。</p>
+     */
+    private static boolean shapeRetryable(String code) {
+        if (code == null) return false;
+        if ("QINLIN_REJECTED".equals(code) || "BAD_FORMAT".equals(code)) return true;
+        if (!code.startsWith("HTTP_")) return false;
+        int st = 0;
+        try {
+            st = Integer.parseInt(code.substring(5));
+        } catch (Exception ignored) {
+        }
+        // 4xx 才可能是姿势不对；5xx 是上游自身故障，换格式不会让它恢复
+        return st == 400 || st == 404 || st == 405 || st == 415;
+    }
+
     public static List<Community> communities(String token) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("method", "communityInfo");
@@ -639,10 +758,23 @@ public final class QinlinApi {
         int[] order = attemptOrder(modes.length, PREFERRED_COMM_MODE);
 
         boolean succeeded = false;
+        /** 是否因网络层原因（超时 / 断网 / TLS）放弃：决定抛 NETWORK 还是 COMMUNITY_FAILED。 */
+        boolean netFail = false;
+        /** 是否因总预算耗尽而放弃：同样按「可重试的网络问题」处理。 */
+        boolean budgetHit = false;
+        /** 最后一次业务拒绝的 code，用于给界面一句可读的原因。 */
+        String lastBizCode = "";
         Object data = null;
         StringBuilder log = new StringBuilder();
+        final long deadline = System.currentTimeMillis() + COMM_TOTAL_BUDGET_MS;
         for (int k = 0; k < order.length; k++) {
             final int i = order[k];
+            if (k > 0 && System.currentTimeMillis() > deadline) {
+                AppLog.w(AppLog.DOORS, "小区列表已用尽 " + COMM_TOTAL_BUDGET_MS
+                        + "ms 总预算 → 停止换姿势重试");
+                budgetHit = true;
+                break;
+            }
             AppLog.i(AppLog.DOORS, "小区列表尝试 " + (k + 1) + "/" + order.length + " → " + names[i]
                     + (k == 0 && PREFERRED_COMM_MODE == i ? "（上次成功姿势）" : ""));
             try {
@@ -662,9 +794,17 @@ public final class QinlinApi {
                 }
                 log.append(names[i]).append(" → ").append(e.code).append(": ")
                         .append(shorten(e.getMessage(), 120)).append("\n");
+                lastBizCode = e.code;
                 AppLog.w(AppLog.DOORS, names[i] + " 失败 [" + e.code + "] "
                         + shorten(e.getMessage(), 120));
-                if (!e.code.startsWith("HTTP_")) break; // 业务明确拒绝，换姿势无意义
+                // 只有「像请求姿势不对」的失败才值得换一种 body 形式重试。
+                // 旧实现对任何非 HTTP_ 的业务码都直接 break，而网关对格式问题很可能
+                // 是以业务码拒绝的（不是 4xx）—— 于是 2~4 号兜底姿势实际上从没被用到过。
+                if (!shapeRetryable(e.code)) {
+                    AppLog.w(AppLog.DOORS, "「" + e.code + "」不是请求姿势问题（业务拒绝 / 上游故障）"
+                            + "→ 停止换姿势重试");
+                    break;
+                }
             } catch (Exception e) {
                 log.append(names[i]).append(" → ").append(e.getClass().getSimpleName())
                         .append(": ").append(shorten(e.getMessage(), 120)).append("\n");
@@ -673,15 +813,29 @@ public final class QinlinApi {
                 // 换一种 body 格式照样连不上，继续串行 4 次只会把等待放大到 4×20 秒。
                 if (isNetworkFailure(e)) {
                     AppLog.w(AppLog.DOORS, "网络层失败 → 停止换姿势重试（换请求格式不解决网络问题）");
+                    netFail = true;
                     break;
                 }
             }
         }
         if (!succeeded) {
             DIAG.set(log.toString());
+            if (netFail || budgetHit) {
+                // 断网 / 超时不是「网关拒绝」，上层要按网络问题提示（可以重试），
+                // 而不是显示一段带 SocketTimeoutException 类名的技术文本。
+                AppLog.e(AppLog.DOORS, "小区列表因" + (netFail ? "网络层失败" : "总预算耗尽") + "而中止");
+                throw new ApiException("NETWORK",
+                        netFail ? "网络异常，读不到小区列表。请检查网络后点「↻ 刷新门列表」重试。"
+                                : "读取小区列表超过 " + (COMM_TOTAL_BUDGET_MS / 1000)
+                                  + " 秒仍未完成，请检查网络后点「↻ 刷新门列表」重试。");
+            }
             AppLog.e(AppLog.DOORS, "小区列表全部尝试失败，凭证或网关可能有问题");
-            throw new ApiException("COMMUNITY_FAILED",
-                    "小区列表请求失败，逐项结果：\n" + log);
+            // 明细只进 DIAG 与日志：旧实现把整段带 JVM 类名的逐项结果拼进 message，
+            // 门列表界面直接 status() 给用户看，既看不懂也不像人话。
+            StringBuilder why = new StringBuilder("网关拒绝了小区列表请求");
+            if (lastBizCode.length() > 0) why.append("（").append(lastBizCode).append("）");
+            why.append("。可在「日志」里看逐项明细，或稍后重试。");
+            throw new ApiException("COMMUNITY_FAILED", why.toString());
         }
 
         List<Community> out = new ArrayList<Community>();
@@ -702,7 +856,7 @@ public final class QinlinApi {
             if (o == null) continue;
             int id = o.optInt("communityId", -1);
             if (id <= 0) continue;
-            out.add(new Community(id, o.optString("communityName", "小区 " + id)));
+            out.add(new Community(id, str(o, "communityName", "小区 " + id)));
         }
         AppLog.i(AppLog.DOORS, "解析到 " + out.size() + " 个小区");
         return out;
@@ -716,6 +870,11 @@ public final class QinlinApi {
      * 失败直接抛异常，由调用方判定。
      */
     static void communitiesProbe(String token) throws Exception {
+        communitiesProbe(token, PROBE_CONNECT_MS, PROBE_READ_MS);
+    }
+
+    /** 带超时预算的兜底探活：小部件路径用更短的预算，避免探活吃掉整个广播窗口。 */
+    static void communitiesProbe(String token, int connectMs, int readMs) throws Exception {
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("method", "communityInfo");
         final String[] modes = {"json", "form", "query", "json"};
@@ -725,7 +884,7 @@ public final class QinlinApi {
                 ? PREFERRED_COMM_MODE : 0;
         AppLog.i(AppLog.DOORS, "探活兜底：单次 communityInfo（" + names[mode] + "，短超时，不串行重试）");
         post("/api/app/user/v2/communityInfo", f, token, modes[mode], nums[mode],
-                PROBE_CONNECT_MS, PROBE_READ_MS);
+                connectMs, readMs);
         PREFERRED_COMM_MODE = mode;
         DIAG.set("小区列表：已用「" + names[mode] + "」方式成功");
     }
@@ -765,6 +924,12 @@ public final class QinlinApi {
                 if (ax >= 0) authorizeExpired = ax;
                 if (!out.isEmpty()) AppLog.ok(AppLog.DOORS, "New 接口兜底成功，返回 " + out.size() + " 扇门");
             } catch (Exception e) {
+                // 兜底接口同样可能先撞上凭证失效：不能吞掉，否则界面只显示「未读取到门列表」，
+                // 用户看不到「登录已失效」，也就不会去重新登录。
+                if (e instanceof ApiException && "SESSION_EXPIRED".equals(((ApiException) e).code)) {
+                    AppLog.w(AppLog.DOORS, "New 门列表接口判定凭证失效 → 上抛");
+                    throw e;
+                }
                 AppLog.w(AppLog.DOORS, "New 门列表接口也失败：" + e.getMessage());
             }
         }
@@ -837,26 +1002,39 @@ public final class QinlinApi {
         if (d == null) return;
         int id = d.optInt("doorControlId", -1);
         if (id <= 0) return;
-        String name = d.optString("doorControlName", d.optString("doorName", "门禁 " + id));
+        String name = str(d, "doorControlName", str(d, "doorName", "门禁 " + id));
         for (Door existing : out) if (existing.id == id) return;
-        String online = d.optString("online", "");
+        String online = str(d, "online", "");
         out.add(new Door(communityId, id, name, kind, online));
     }
 
     /**
      * 发送开门指令。成功仅代表「平台已接受指令」，不等于物理门已打开。
+     *
+     * <p>默认超时（5s + 15s）适合应用内：用户看得见进度，宁可多等也不要误判失败后让他再点一次。
+     * 桌面小部件走 {@link #openDoorQuick}，那里有广播窗口的硬约束。</p>
      */
     public static String openDoor(String token, int communityId, int doorId) throws Exception {
+        return openDoor(token, communityId, doorId, 5000, 15000);
+    }
+
+    /** 小部件路径专用：短超时，保证在 {@code goAsync()} 窗口内完成或失败。 */
+    static String openDoorQuick(String token, int communityId, int doorId) throws Exception {
+        return openDoor(token, communityId, doorId, WIDGET_CONNECT_MS, WIDGET_READ_MS);
+    }
+
+    static String openDoor(String token, int communityId, int doorId,
+                           int connectMs, int readMs) throws Exception {
         AppLog.i(AppLog.OPEN, "发送开门指令 | session=" + AppLog.fp(token)
                 + " | cid=" + communityId + " did=" + doorId
                 + " | openid=" + AppLog.fp(openid())
-                + " | 参数位置=URL query");
+                + " | 参数位置=URL query | 超时=" + connectMs + "/" + readMs + "ms");
         TreeMap<String, String> f = new TreeMap<String, String>();
         f.put("appChannel", "1");
         f.put("doorControlId", String.valueOf(doorId));
         f.put("communityId", String.valueOf(communityId));
         try {
-            post("/api/open/doorcontrol/v2/open", f, token, "query");
+            post("/api/open/doorcontrol/v2/open", f, token, "query", true, connectMs, readMs);
             AppLog.ok(AppLog.OPEN, "开门指令已被服务端接受（不等于物理门已开）");
             String raw = RAW.get();       // 只取本线程的响应，不受并发请求干扰
             return raw == null ? "" : raw;
