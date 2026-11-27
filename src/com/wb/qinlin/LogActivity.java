@@ -50,27 +50,36 @@ public class LogActivity extends Activity {
     private static final int MAX_LINES = AppLog.MEM_MAX;
     private static final int REQ_EXPORT = 2001;
 
-    /** 弹窗配色：编译期常量，不再逐处 Color.parseColor。 */
-    private static final int C_INK = 0xFF16233B;        // 标题深墨
-    private static final int C_NAVY = 0xFF1B3A6B;       // 按钮文字深蓝
-    private static final int C_STEEL = 0xFF6B7688;      // 「✕ 关闭」灰字
-    private static final int C_MUTED = 0xFF8A94A6;      // 提示 / 页脚灰
-    private static final int C_LOG_TEXT = 0xFF22304B;   // 日志正文
-    private static final int C_BG = 0xFFF5F7FB;         // 弹窗卡片底
-    private static final int C_BLUE_SOFT = 0xFFE3EAF6;  // 浅蓝按钮底
-    private static final int C_FILTER_BG = 0xFFDCE7FA;  // 「筛选」按钮底
-    private static final int C_DIAG_BG = 0xFFE8F1FF;    // 「诊断快照」按钮底
-    private static final int C_DANGER_BG = 0xFFF3E8E7;  // 「清空日志」按钮底
-    private static final int C_FAIL = 0xFFB3261E;       // 「清空日志」文字 / 失败红
-    private static final int C_STROKE = 0xFFC9D6EA;     // 常规浅描边
-    private static final int C_STATUS_BG = 0xFFE9EEF7;  // 日志框底
-    private static final int C_STATUS_EDGE = 0xFF9DB4DC;// 日志框描边
-    private static final int C_BLUE = 0xFF2563EB;       // 「回到最新」胶囊底
-    private static final int C_BLUE_EDGE = 0xFF1B4FBF;  // 胶囊描边
-    // 日志级别着色（渲染时按 Entry.level 取）
-    private static final int C_LV_ERR = 0xFFC5221F;
-    private static final int C_LV_WARN = 0xFFB06000;
-    private static final int C_LV_OK = 0xFF137333;
+    /**
+     * 弹窗配色。与另外三个界面共用 res/values/colors.xml 的语义令牌，
+     * 深色版本在 values-night —— 这里不再出现任何字面色值。
+     */
+    private int C_INK, C_NAVY, C_STEEL, C_MUTED, C_LOG_TEXT, C_BG, C_BLUE_SOFT;
+    private int C_FILTER_BG, C_DIAG_BG, C_DANGER_BG, C_FAIL, C_STROKE;
+    private int C_STATUS_BG, C_STATUS_EDGE, C_BLUE_FILL, C_BLUE_EDGE;
+    private int C_LV_ERR, C_LV_WARN, C_LV_OK;
+
+    private void loadPalette() {
+        C_INK = getColor(R.color.q_ink);
+        C_NAVY = getColor(R.color.q_navy);
+        C_STEEL = getColor(R.color.q_steel);
+        C_MUTED = getColor(R.color.q_muted);
+        C_LOG_TEXT = getColor(R.color.q_log_text);
+        C_BG = getColor(R.color.q_bg);
+        C_BLUE_SOFT = getColor(R.color.q_blue_soft);
+        C_FILTER_BG = getColor(R.color.q_filter_bg);
+        C_DIAG_BG = getColor(R.color.q_diag_bg);
+        C_DANGER_BG = getColor(R.color.q_danger_bg);
+        C_FAIL = getColor(R.color.q_fail);
+        C_STROKE = getColor(R.color.q_edge_strong);
+        C_STATUS_BG = getColor(R.color.q_inset);
+        C_STATUS_EDGE = getColor(R.color.q_toggle_edge);
+        C_BLUE_FILL = getColor(R.color.q_blue_fill);
+        C_BLUE_EDGE = getColor(R.color.q_blue_edge);
+        C_LV_ERR = getColor(R.color.q_red);
+        C_LV_WARN = getColor(R.color.q_lv_warn);
+        C_LV_OK = getColor(R.color.q_lv_ok);
+    }
 
     private int filterIdx;
     private Button filterBtn;
@@ -103,6 +112,7 @@ public class LogActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadPalette();
         AppLog.init(this);
         setupWindow();
         buildUi();
@@ -152,16 +162,24 @@ public class LogActivity extends Activity {
         return Ui.label(this, text, sizeSp, color, bold);
     }
 
+    /**
+     * 工具条按钮：圆角 12dp + 系统涟漪，最低高度 44dp。
+     *
+     * <p>旧实现 setBackgroundColor 抹掉了按钮的按压态，且 11sp 字 + 6dp 内边距
+     * 只有约 33dp 高——两行共 5 个按钮挤在一起，误触率很高。现在拉到 44dp，
+     * 仍在两行内放得下（日志区少 ~20dp，可滚动的正文不受影响）。</p>
+     */
     private Button smallButton(String text, int bg, int fg) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
         b.setTextColor(fg);
-        b.setBackgroundColor(bg);
-        b.setTextSize(12);
-        b.setPadding(dp(4), dp(8), dp(4), dp(8));
+        b.setBackground(Ui.rippled(this, bg, Ui.R_MD, 0));
+        b.setTextSize(Ui.T_BODY_S);
+        b.setPadding(dp(4), dp(6), dp(4), dp(6));
         b.setMinWidth(0);
         b.setMinimumWidth(0);
+        b.setMinHeight(dp(46));
         b.setLayoutParams(new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         return b;
@@ -173,7 +191,7 @@ public class LogActivity extends Activity {
         root.setPadding(dp(16), dp(14), dp(16), dp(14));
         GradientDrawable card = new GradientDrawable();
         card.setColor(C_BG);
-        card.setCornerRadius(dp(16));
+        card.setCornerRadius(dp(Ui.R_LG));
         card.setStroke(dp(1), C_STROKE);
         root.setBackground(card);
 
@@ -181,9 +199,9 @@ public class LogActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(label("分类日志", 18, C_INK, true),
+        head.addView(label("分类日志", Ui.T_TITLE, C_INK, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView closeTv = label("✕ 关闭", 14, C_STEEL, true);
+        TextView closeTv = label("✕ 关闭", Ui.T_BODY, C_STEEL, true);
         closeTv.setPadding(dp(12), dp(8), dp(2), dp(8));
         closeTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { finish(); }
@@ -192,7 +210,7 @@ public class LogActivity extends Activity {
         root.addView(head);
 
         TextView hint = label("上下滑动查看历史 · 新日志自动跟到最新 · 手机号与凭证已脱敏",
-                12, C_MUTED, false);
+                Ui.T_BODY_S, C_MUTED, false);
         hint.setPadding(0, dp(2), 0, dp(8));
         root.addView(hint);
 
@@ -262,7 +280,7 @@ public class LogActivity extends Activity {
                                 filterBtn.setText("筛选：全部 ▸");
                                 follow = true;
                                 render();
-                                Ui.toast(LogActivity.this, "日志已清空");
+                                Ui.snack(LogActivity.this, "日志已清空");
                             }
                         })
                         .show();
@@ -277,7 +295,10 @@ public class LogActivity extends Activity {
         logScroll.setBackground(makeLogBox());
         logScroll.setPadding(dp(2), dp(4), dp(2), dp(4));
 
-        logTv = label("", 12, C_LOG_TEXT, false);
+        logTv = label("", Ui.T_BODY_S, C_LOG_TEXT, false);
+        // 等宽字体：时间戳 / 级别 / tag 三列宽度固定，上下行才能对齐扫读。
+        // 旧版是默认比例字体，每行的时间戳宽度都不一样，翻日志像在读一段散文。
+        logTv.setTypeface(android.graphics.Typeface.MONOSPACE);
         logTv.setPadding(dp(12), dp(8), dp(12), dp(8));
         logTv.setLineSpacing(dp(2), 1f);
         logScroll.addView(logTv, new FrameLayout.LayoutParams(
@@ -286,11 +307,11 @@ public class LogActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 上滑离开底部后出现：一键回到最新并恢复跟随
-        newBtn = label("↓ 回到最新", 12, Color.WHITE, true);
+        newBtn = label("↓ 回到最新", Ui.T_BODY_S, Color.WHITE, true);
         newBtn.setPadding(dp(12), dp(7), dp(12), dp(7));
         GradientDrawable nb = new GradientDrawable();
-        nb.setColor(C_BLUE);
-        nb.setCornerRadius(dp(15));
+        nb.setColor(C_BLUE_FILL);
+        nb.setCornerRadius(dp(Ui.R_PILL));
         nb.setStroke(dp(1), C_BLUE_EDGE);
         newBtn.setBackground(nb);
         newBtn.setElevation(dp(6));
@@ -309,7 +330,7 @@ public class LogActivity extends Activity {
         wrapLp.topMargin = dp(10);
         root.addView(wrap, wrapLp);
 
-        footTv = label("", 11, C_MUTED, false);
+        footTv = label("", Ui.T_CAPTION, C_MUTED, false);
         footTv.setPadding(0, dp(8), 0, 0);
         root.addView(footTv);
 
@@ -363,10 +384,10 @@ public class LogActivity extends Activity {
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("qinlin-log", s));
-            Ui.toast(this, tip);
+            Ui.snack(this, tip);
         } catch (Exception e) {
             AppLog.e(AppLog.ERR, "复制失败 " + AppLog.stack(e));
-            Ui.toast(this, "复制失败");
+            Ui.snack(this, "复制失败");
         }
     }
 
@@ -380,7 +401,7 @@ public class LogActivity extends Activity {
      */
     private void copyAllLogsAsync() {
         final Context app = getApplicationContext();
-        Ui.toast(this, "正在整理最近日志…");
+        Ui.snack(this, "正在整理最近日志…");
         new Thread(new Runnable() {
             @Override public void run() {
                 // snapshot/header 里有包信息与偏好读取，仍放后台
@@ -408,7 +429,7 @@ public class LogActivity extends Activity {
             AppLog.i(AppLog.SYS, "已打开日志导出文件选择器");
         } catch (Exception e) {
             AppLog.e(AppLog.ERR, "无法打开导出界面 " + AppLog.stack(e));
-            Ui.toast(this, "导出不可用：" + e.getMessage());
+            Ui.snack(this, "导出不可用：" + e.getMessage());
         }
     }
 
@@ -421,7 +442,7 @@ public class LogActivity extends Activity {
             // 主线程只负责选完目标文件后立刻提示「正在导出」。
             final android.net.Uri target = data.getData();
             final Context app = getApplicationContext();
-            Ui.toast(this, "正在导出日志…");
+            Ui.snack(this, "正在导出日志…");
             new Thread(new Runnable() {
                 @Override public void run() {
                     OutputStream os = null;
@@ -430,10 +451,10 @@ public class LogActivity extends Activity {
                         os.write(AppLog.exportText(app).getBytes("UTF-8"));
                         os.flush();
                         AppLog.ok(AppLog.SYS, "日志已导出到所选位置");
-                        Ui.toast(app, "日志已导出");
+                        Ui.snack(LogActivity.this, "日志已导出");
                     } catch (Exception e) {
                         AppLog.e(AppLog.ERR, "日志导出失败 " + AppLog.stack(e));
-                        Ui.toast(app, "导出失败：" + e.getMessage());
+                        Ui.snack(LogActivity.this, "导出失败：" + e.getMessage());
                     } finally {
                         if (os != null) try { os.close(); } catch (Exception ignored) {}
                     }
@@ -447,7 +468,7 @@ public class LogActivity extends Activity {
     private GradientDrawable makeLogBox() {
         GradientDrawable box = new GradientDrawable();
         box.setColor(C_STATUS_BG);
-        box.setCornerRadius(dp(10));
+        box.setCornerRadius(dp(Ui.R_MD));
         box.setStroke(dp(1), C_STATUS_EDGE);
         return box;
     }

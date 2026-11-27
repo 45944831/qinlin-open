@@ -9,6 +9,9 @@
 !/build-apk.py
 !/api-probe.py
 !/run-tests.py
+# tools/ 整目录默认被 /* 排除，必须先放开目录再挑文件（git 不允许直接反选被排除目录里的文件）
+!/tools/
+!/tools/make-widget-previews.py
 !/src/
 !/src/**
 !/tests/

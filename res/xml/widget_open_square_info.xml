@@ -3,12 +3,14 @@
   1x1 迷你版声明：minWidth/minHeight 按「1 格 × 70dp - 30dp」算 = 40dp。
   不允许缩放：整格就是一个按钮，拉大变形反而难按。
   updatePeriodMillis=0：不定时唤醒、不做后台探活（原因见 widget_open_info.xml）。
+  previewImage 供不认 previewLayout（API 31+）的旧启动器显示，生成方式见 tools/make-widget-previews.py。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc_square"
     android:initialLayout="@layout/widget_open_square"
     android:minHeight="40dp"
     android:minWidth="40dp"
+    android:previewImage="@drawable/widget_preview_square"
     android:previewLayout="@layout/widget_open_square"
     android:resizeMode="none"
     android:targetCellHeight="1"

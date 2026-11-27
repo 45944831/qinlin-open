@@ -25,8 +25,8 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:text="开门 · 4×2 大卡片"
-        android:textColor="#8A94A6"
-        android:textSize="10sp" />
+        android:textColor="@color/q_muted"
+        android:textSize="11sp" />
 
     <!-- 第一行：状态点 + 门名 + 区域。整行点了打开 App（不是开门） -->
     <LinearLayout
@@ -41,8 +41,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="●"
-            android:textColor="#137333"
-            android:textSize="9sp" />
+            android:textColor="@color/q_green"
+            android:textSize="11sp" />
 
         <TextView
             android:id="@+id/w_door"
@@ -53,8 +53,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="1栋2单元"
-            android:textColor="#16233B"
-            android:textSize="15sp"
+            android:textColor="@color/q_ink"
+            android:textSize="17sp"
             android:textStyle="bold" />
 
         <TextView
@@ -65,8 +65,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="楼栋门"
-            android:textColor="#8A94A6"
-            android:textSize="11sp" />
+            android:textColor="@color/q_muted"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <!-- 主按钮：唯一能触发开门的控件，占满剩余高度 -->
@@ -94,6 +94,6 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:text="点按钮直接开门"
-        android:textColor="#5A6B85"
-        android:textSize="11sp" />
+        android:textColor="@color/q_sub"
+        android:textSize="12sp" />
 </LinearLayout>

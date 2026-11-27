@@ -4,12 +4,16 @@
   updatePeriodMillis=0：不定时唤醒、不发后台请求。真机验证服务端按账号单会话，
   官方 App 重新登录即作废旧凭证，后台探活挡不住互踢，只会白耗电。
   卡片只在开门 / 换门 / 回到 App 时刷新；会话检查同样只在这些按需时刻触发。
+
+  previewLayout 是 API 31 起才认的字段，旧启动器（含不少第三方桌面）只读 previewImage，
+  两者都给：新系统用真实布局渲染，旧系统用 tools/make-widget-previews.py 生成的位图。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc"
     android:initialLayout="@layout/widget_open"
     android:minHeight="110dp"
     android:minWidth="250dp"
+    android:previewImage="@drawable/widget_preview"
     android:previewLayout="@layout/widget_open"
     android:resizeMode="horizontal|vertical"
     android:targetCellHeight="2"

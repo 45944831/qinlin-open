@@ -20,8 +20,8 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="●"
-        android:textColor="#137333"
-        android:textSize="9sp" />
+        android:textColor="@color/q_green"
+        android:textSize="11sp" />
 
     <LinearLayout
         android:id="@+id/w_header"
@@ -38,8 +38,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="开门 · 4×1 横条"
-            android:textColor="#8A94A6"
-            android:textSize="9sp" />
+            android:textColor="@color/q_muted"
+            android:textSize="11sp" />
 
         <TextView
             android:id="@+id/w_door"
@@ -48,8 +48,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="1栋2单元"
-            android:textColor="#16233B"
-            android:textSize="12.5sp"
+            android:textColor="@color/q_ink"
+            android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
@@ -59,8 +59,8 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="点右边开门"
-            android:textColor="#8A94A6"
-            android:textSize="9.5sp" />
+            android:textColor="@color/q_muted"
+            android:textSize="11sp" />
     </LinearLayout>
 
     <TextView
@@ -75,6 +75,6 @@
         android:paddingRight="16dp"
         android:text="开 门"
         android:textColor="#FFFFFF"
-        android:textSize="13sp"
+        android:textSize="14sp"
         android:textStyle="bold" />
 </LinearLayout>

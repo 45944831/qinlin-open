@@ -3,12 +3,14 @@
   4x1 横条版声明：minWidth 按「4 格 × 70dp - 30dp」= 250dp，高度 1 格 = 40dp。
   允许横向缩放适配不同屏宽，高度固定一行。
   updatePeriodMillis=0：不定时唤醒、不做后台探活。
+  previewImage 供不认 previewLayout（API 31+）的旧启动器显示，生成方式见 tools/make-widget-previews.py。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_desc_bar"
     android:initialLayout="@layout/widget_open_bar"
     android:minHeight="40dp"
     android:minWidth="250dp"
+    android:previewImage="@drawable/widget_preview_bar"
     android:previewLayout="@layout/widget_open_bar"
     android:resizeMode="horizontal"
     android:targetCellHeight="1"

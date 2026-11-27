@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 2x1 / 4x1 横条的胶囊按钮：开门中转灰 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="19dp" />
-    <solid android:color="#9AA7BC" />
+    <corners android:radius="99dp" />
+    <solid android:color="#6B7688" />
 </shape>

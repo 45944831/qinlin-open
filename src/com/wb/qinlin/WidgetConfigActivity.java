@@ -38,20 +38,33 @@ public class WidgetConfigActivity extends Activity {
     public static final String EXTRA_FOCUS_ID = "focus_widget_id";
     private static final int REQ_PICK_DOOR = 2101;
 
-    // 配色（与 DoorListActivity / MainActivity 同源）
-    private static final int C_INK = 0xFF16233B;
-    private static final int C_NAVY = 0xFF1B3A6B;
-    private static final int C_TIP = 0xFF607089;
-    private static final int C_STROKE = 0xFFC9D6EA;
-    private static final int C_BLUE_SOFT = 0xFFE3EAF6;
-    private static final int C_SEL_BLUE = 0xFF2563EB;
-    private static final int C_BG_SOFT = 0xFFF5F7FB;
-    private static final int C_MUTED = 0xFF8A94A6;
+    /**
+     * 配色：与另外三个界面共用 res/values/colors.xml 的语义令牌。
+     * 六个主题色圆点也走资源（深色下提亮），不再在代码里写死 ARGB。
+     */
+    private int C_INK, C_NAVY, C_TIP, C_STROKE, C_BLUE_SOFT, C_BLUE_FILL;
+    private int C_BG_SOFT, C_MUTED, C_SURFACE, C_FIELD, C_SKIP_BG, C_STEEL;
+    private int[] SWATCH;
 
-    /** 主题色圆点：与 OpenWidget.COLORS 顺序一致，纯展示用（真实配色在 drawable 里）。 */
-    private static final int[] SWATCH = {
-            0xFFD93025, 0xFF2563EB, 0xFF137333, 0xFF7B2FBE, 0xFFE8620A, 0xFF0B7285
-    };
+    private void loadPalette() {
+        C_INK = getColor(R.color.q_ink);
+        C_NAVY = getColor(R.color.q_navy);
+        C_TIP = getColor(R.color.q_sub);
+        C_STROKE = getColor(R.color.q_edge_strong);
+        C_BLUE_SOFT = getColor(R.color.q_blue_soft);
+        C_BLUE_FILL = getColor(R.color.q_blue_fill);
+        C_BG_SOFT = getColor(R.color.q_bg);
+        C_MUTED = getColor(R.color.q_muted);
+        C_SURFACE = getColor(R.color.q_surface);
+        C_FIELD = getColor(R.color.q_field);
+        C_SKIP_BG = getColor(R.color.q_skip_bg);
+        C_STEEL = getColor(R.color.q_steel);
+        SWATCH = new int[] {
+                getColor(R.color.q_swatch0), getColor(R.color.q_swatch1),
+                getColor(R.color.q_swatch2), getColor(R.color.q_swatch3),
+                getColor(R.color.q_swatch4), getColor(R.color.q_swatch5)
+        };
+    }
 
     /** 组件名输入过滤器：最多 5 个 Unicode 码点（汉字/emoji 都算 1 个），与 Prefs 存储层一致。 */
     private static final InputFilter NAME_FILTER = new InputFilter() {
@@ -92,6 +105,7 @@ public class WidgetConfigActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadPalette();
         AppLog.init(this);
         focusId = getIntent().getIntExtra(EXTRA_FOCUS_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
         setupFloatingWindow();
@@ -169,7 +183,7 @@ public class WidgetConfigActivity extends Activity {
         select(target);
         if (focusMissed) {
             AppLog.w(AppLog.UI, "小组件设置：要定位的实例已不在桌面，改为显示第一个组件");
-            Ui.toast(this, "该小组件已不在桌面，已显示第一个");
+            Ui.snack(this, "该小组件已不在桌面，已显示第一个");
         }
     }
 
@@ -189,12 +203,12 @@ public class WidgetConfigActivity extends Activity {
         tab.setGravity(Gravity.CENTER);
         tab.setPadding(dp(10), dp(8), dp(10), dp(8));
 
-        TextView name = label(it.name(this), 12, C_INK, true);
+        TextView name = label(it.name(this), Ui.T_BODY_S, C_INK, true);
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         name.setTag("tab_name");
         tab.addView(name);
-        TextView size = label(it.size(), 10, C_MUTED, false);
+        TextView size = label(it.size(), Ui.T_CAPTION, C_MUTED, false);
         size.setSingleLine(true);
         tab.addView(size);
 
@@ -209,12 +223,10 @@ public class WidgetConfigActivity extends Activity {
         return tab;
     }
 
+    /** 标签选中态：蓝底白字；未选：浅蓝底墨字。两者都保留系统涟漪。 */
     private void styleTab(LinearLayout tab, boolean on) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(10));
-        gd.setColor(on ? C_SEL_BLUE : C_BLUE_SOFT);
-        gd.setStroke(dp(1), on ? C_NAVY : C_STROKE);
-        tab.setBackground(gd);
+        tab.setBackground(Ui.rippled(this, on ? C_BLUE_FILL : C_BLUE_SOFT, Ui.R_MD,
+                on ? C_NAVY : C_STROKE));
         View name = tab.findViewWithTag("tab_name");
         if (name instanceof TextView) ((TextView) name).setTextColor(on ? Color.WHITE : C_INK);
     }
@@ -234,19 +246,19 @@ public class WidgetConfigActivity extends Activity {
         final OpenWidget.Installed it = items.get(index);
         final int widgetId = it.id;
 
-        TextView hint = label("正在设置：" + it.size() + "（#" + widgetId + "）", 12, C_TIP, false);
+        TextView hint = label("正在设置：" + it.size() + "（#" + widgetId + "）", Ui.T_BODY_S, C_TIP, false);
         hint.setPadding(0, 0, 0, dp(10));
         editorBox.addView(hint);
 
         // ---- 组件名 ----
-        editorBox.addView(label("组件名称（最多 5 个字，显示在桌面卡片上）", 13, C_INK, true));
+        editorBox.addView(label("组件名称（最多 5 个字，显示在桌面卡片上）", Ui.T_BODY, C_INK, true));
         final EditText nameEt = new EditText(this);
         nameEt.setHint(it.name(this));
         // 有未保存的草稿就优先恢复：编辑区重建（onResume / 切 Tab / 换色）不能吃掉用户输入
         String draft = nameDrafts.get(widgetId);
         nameEt.setText(draft != null ? draft : Prefs.widgetName(widgetId, this));
         nameEt.setSingleLine(true);
-        nameEt.setTextSize(15);
+        nameEt.setTextSize(Ui.T_BODY);
         nameEt.setFilters(new InputFilter[]{NAME_FILTER}); // 输入时就限制 5 个字符（按码点）
         // 监听放在 setText 之后：初始化那一次不算用户输入，不该生成草稿
         nameEt.addTextChangedListener(new android.text.TextWatcher() {
@@ -257,8 +269,8 @@ public class WidgetConfigActivity extends Activity {
             }
         });
         GradientDrawable etBg = new GradientDrawable();
-        etBg.setCornerRadius(dp(10));
-        etBg.setColor(Color.WHITE);
+        etBg.setCornerRadius(dp(Ui.R_MD));
+        etBg.setColor(C_FIELD);
         etBg.setStroke(dp(1), C_STROKE);
         nameEt.setBackground(etBg);
         nameEt.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -274,13 +286,13 @@ public class WidgetConfigActivity extends Activity {
                 OpenWidget.refreshAll(WidgetConfigActivity.this);
                 updateTabLabel(selectedIndex);   // 顶部标签同步成新名字
                 select(selectedIndex);   // 重画编辑区（选中态 / 提示）
-                Ui.toast(WidgetConfigActivity.this, "名称已更新");
+                Ui.snack(WidgetConfigActivity.this, "名称已更新");
             }
         });
         editorBox.addView(saveNameBtn);
 
         // ---- 主题色 ----
-        TextView colorTitle = label("主题色（按钮 + 卡片底色）", 13, C_INK, true);
+        TextView colorTitle = label("主题色（按钮 + 卡片底色）", Ui.T_BODY, C_INK, true);
         colorTitle.setPadding(0, dp(14), 0, dp(8));
         editorBox.addView(colorTitle);
         LinearLayout colorRow = new LinearLayout(this);
@@ -292,17 +304,17 @@ public class WidgetConfigActivity extends Activity {
         editorBox.addView(colorRow);
 
         // ---- 绑定的门 ----
-        TextView doorTitle = label("控制哪扇门", 13, C_INK, true);
+        TextView doorTitle = label("控制哪扇门", Ui.T_BODY, C_INK, true);
         doorTitle.setPadding(0, dp(14), 0, dp(8));
         editorBox.addView(doorTitle);
         OpenWidget.BoundDoor bound = OpenWidget.boundDoor(this, widgetId);
         String doorText = bound.bound
                 ? (bound.name.length() > 0 ? bound.name : ("门 #" + bound.did))
                 : "未单独绑定（跟随主界面默认门）";
-        TextView doorTv = label(doorText, 14, C_NAVY, true);
+        TextView doorTv = label(doorText, Ui.T_BODY, C_NAVY, true);
         doorTv.setPadding(dp(12), dp(10), dp(12), dp(10));
         GradientDrawable doorBg = new GradientDrawable();
-        doorBg.setCornerRadius(dp(10));
+        doorBg.setCornerRadius(dp(Ui.R_MD));
         doorBg.setColor(C_BG_SOFT);
         doorBg.setStroke(dp(1), C_STROKE);
         doorTv.setBackground(doorBg);
@@ -318,13 +330,13 @@ public class WidgetConfigActivity extends Activity {
         });
         editorBox.addView(pickBtn);
 
-        Button resetBtn = makeButton("恢复跟随默认门", 0xFFF1F3F7, 0xFF6B7688);
+        Button resetBtn = makeButton("恢复跟随默认门", C_SKIP_BG, C_STEEL);
         resetBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 Prefs.setWidgetDoor(widgetId, WidgetConfigActivity.this, "");
                 OpenWidget.refreshAll(WidgetConfigActivity.this);
                 renderEditor(selectedIndex);
-                Ui.toast(WidgetConfigActivity.this, "已恢复跟随默认门");
+                Ui.snack(WidgetConfigActivity.this, "已恢复跟随默认门");
             }
         });
         editorBox.addView(resetBtn);
@@ -350,7 +362,7 @@ public class WidgetConfigActivity extends Activity {
         wrap.addView(dot, new LinearLayout.LayoutParams(size, size,
                 Gravity.CENTER_HORIZONTAL));
 
-        TextView cap = label(OpenWidget.COLORS[idx], 9, selected ? C_INK : C_MUTED, selected);
+        TextView cap = label(OpenWidget.COLORS[idx], Ui.T_CAPTION, selected ? C_INK : C_MUTED, selected);
         cap.setGravity(Gravity.CENTER);           // 名称文字在格内居中，与圆点同轴
         cap.setPadding(0, dp(3), 0, 0);
         wrap.addView(cap, new LinearLayout.LayoutParams(
@@ -369,13 +381,10 @@ public class WidgetConfigActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
-        b.setTextSize(13);
+        b.setTextSize(Ui.T_BODY);
         b.setTextColor(fg);
-        GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(10));
-        gd.setColor(bg);
-        gd.setStroke(dp(1), C_STROKE);
-        b.setBackground(gd);
+        b.setBackground(Ui.rippled(this, bg, Ui.R_MD, C_STROKE));
+        b.setMinHeight(dp(46));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(8);
@@ -402,8 +411,8 @@ public class WidgetConfigActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(18));
+        bg.setColor(C_SURFACE);
+        bg.setCornerRadius(dp(Ui.R_LG));
         bg.setStroke(dp(1), C_STROKE);
         card.setBackground(bg);
         card.setElevation(dp(14));
@@ -413,9 +422,9 @@ public class WidgetConfigActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(label("小组件设置", 20, C_INK, true),
+        head.addView(label("小组件设置", Ui.T_HEADLINE, C_INK, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView closeTv = label("✕ 关闭", 14, C_NAVY, true);
+        TextView closeTv = label("✕ 关闭", Ui.T_BODY, C_NAVY, true);
         closeTv.setPadding(dp(12), dp(8), dp(4), dp(8));
         closeTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { finish(); }
@@ -424,7 +433,7 @@ public class WidgetConfigActivity extends Activity {
         card.addView(head);
 
         TextView tip = label("桌面上每一个小组件都可单独改名、换色、指定控制的门。",
-                11, C_TIP, false);
+                Ui.T_BODY_S, C_TIP, false);
         tip.setPadding(0, dp(4), 0, dp(8));
         card.addView(tip);
 
@@ -440,7 +449,7 @@ public class WidgetConfigActivity extends Activity {
 
         // 空状态
         emptyTv = label("桌面上还没有小组件。\n\n请长按桌面空白处 → 小部件 → 找到「qinlin 快捷开门」\n选择一种尺寸添加到桌面后，再来这里设置。",
-                14, C_TIP, false);
+                Ui.T_BODY, C_TIP, false);
         emptyTv.setPadding(dp(16), dp(28), dp(16), dp(28));
         emptyTv.setVisibility(View.GONE);
         card.addView(emptyTv);

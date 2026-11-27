@@ -614,7 +614,8 @@ public class OpenWidget extends AppWidgetProvider {
         String door = "";
         String meta = "";
         String state = "";
-        int stateColor = 0xFF5A6B85;
+        // 由 readState 按资源色填充（深色模式下要换成浅色，不能写死 ARGB）
+        int stateColor = 0;
         int colorIdx = 0;      // 主题色索引
         String label = "";     // 组件自定义名（含默认名回退）
 
@@ -697,6 +698,7 @@ public class OpenWidget extends AppWidgetProvider {
 
     private static State readState(Context c, int mode, int style, int appWidgetId) {
         State s = new State();
+        s.stateColor = c.getColor(R.color.q_sub);
         s.appWidgetId = appWidgetId;
         s.colorIdx = Prefs.widgetColor(appWidgetId, c);
         String custom = Prefs.widgetName(appWidgetId, c);
@@ -746,18 +748,18 @@ public class OpenWidget extends AppWidgetProvider {
 
         if (s.busy) {
             s.state = "正在下发开门指令…";
-            s.stateColor = 0xFFB3261E;
+            s.stateColor = c.getColor(R.color.q_fail);
         } else if (s.recoverable) {
             // 凭证状态是会持续存在的条件，优先于「上次没收到结果」这条一次性提示
             s.state = "凭证已超时，点按尝试恢复登录后直接开门";
-            s.stateColor = 0xFFB3261E;
+            s.stateColor = c.getColor(R.color.q_fail);
         } else if (s.interrupted) {
             s.state = "上次开门没收到结果，可能已中断，请重试";
-            s.stateColor = 0xFFB3261E;
+            s.stateColor = c.getColor(R.color.q_fail);
         } else if (!s.ready) {
             s.state = b.broken ? "这个组件绑的门读不出来了，点门名重新选一扇"
                     : (s.logged ? "选好门后，这里就能一键开门" : "登录并选门后，这里直接开门");
-            s.stateColor = 0xFF2563EB;
+            s.stateColor = c.getColor(R.color.q_blue);
         } else {
             String[] p = Prefs.widgetLast(c, appWidgetId).split("\\|", 3);
             if (p.length == 3) {
@@ -768,7 +770,7 @@ public class OpenWidget extends AppWidgetProvider {
                 } catch (Throwable ignored) {
                 }
                 s.state = "上次：" + when(ts) + " · " + p[2];
-                s.stateColor = ok ? 0xFF137333 : 0xFFB3261E;
+                s.stateColor = c.getColor(ok ? R.color.q_green : R.color.q_fail);
             } else {
                 s.state = "点按钮直接开门，无需打开应用";
             }
@@ -838,9 +840,9 @@ public class OpenWidget extends AppWidgetProvider {
 
         rv.setTextViewText(R.id.w_door, s.door);
         rv.setTextViewText(R.id.w_meta, s.meta);
-        rv.setTextColor(R.id.w_door, s.openable() ? 0xFF16233B : 0xFF5A6B85);
-        rv.setTextColor(R.id.w_meta, s.openable() ? 0xFF8A94A6 : 0xFF2563EB);
-        rv.setTextColor(R.id.w_dot, s.openable() ? 0xFF137333 : 0xFF9AA7BC);
+        rv.setTextColor(R.id.w_door, c.getColor(s.openable() ? R.color.q_ink : R.color.q_sub));
+        rv.setTextColor(R.id.w_meta, c.getColor(s.openable() ? R.color.q_muted : R.color.q_blue));
+        rv.setTextColor(R.id.w_dot, c.getColor(s.openable() ? R.color.q_green : R.color.q_faint));
 
         applyButton(rv, s, btn, R.drawable.widget_btn_busy,
                 R.drawable.widget_btn_blue, "开 门", "开门中…", "打开应用");
@@ -932,8 +934,8 @@ public class OpenWidget extends AppWidgetProvider {
         rv.setTextViewText(R.id.w_label, s.label);
 
         rv.setTextViewText(R.id.w_door, s.door);
-        rv.setTextColor(R.id.w_door, s.openable() ? 0xFF16233B : 0xFF5A6B85);
-        rv.setTextColor(R.id.w_dot, s.openable() ? 0xFF137333 : 0xFF9AA7BC);
+        rv.setTextColor(R.id.w_door, c.getColor(s.openable() ? R.color.q_ink : R.color.q_sub));
+        rv.setTextColor(R.id.w_dot, c.getColor(s.openable() ? R.color.q_green : R.color.q_faint));
         rv.setTextViewText(R.id.w_meta, shortState(s));
         rv.setTextColor(R.id.w_meta, s.stateColor);
 

@@ -24,6 +24,7 @@ import android.view.TouchDelegate;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -48,48 +49,63 @@ public class MainActivity extends Activity {
     private static final int REQ_WIDGET_CFG = 1003;
 
     /**
-     * 主界面配色（与效果图同一套色值，集中在这里避免逐个 Color.parseColor）。
-     * 全部界面用色都是编译期常量：refreshDoorLabel / refreshStats 这类高频刷新路径
-     * 不再每次解析字符串、分配新对象。
+     * 主界面配色。全部来自 res/values/colors.xml（深色版本在 values-night），
+     * 本类不再持有任何色值——四个界面共用同一份语义色板，深色模式自动生效。
+     *
+     * <p>这些字段在 onCreate 里由 {@link #loadPalette()} 填充：资源色必须在
+     * Context 附着之后才能取，不能写成编译期常量。</p>
      */
-    private static final int C_BG = 0xFFF5F7FB;
-    private static final int C_INK = 0xFF16233B;
-    private static final int C_SUB = 0xFF5A6B85;
-    private static final int C_MUTED = 0xFF8A94A6;
-    private static final int C_FAINT = 0xFF9AA7BC;
-    private static final int C_BLUE = 0xFF2563EB;
-    private static final int C_RED = 0xFFD93025;
-    private static final int C_GREEN = 0xFF137333;
-    private static final int C_NAVY = 0xFF1B3A6B;         // 深蓝文字：浅蓝底按钮 / 日志入口
-    private static final int C_STEEL = 0xFF6B7688;        // 钢灰：未选门副标题 / 禁用按钮描边
-    private static final int C_FAIL = 0xFFB3261E;         // 失败红：记录 / 离线状态 / 警示字
-    private static final int C_DOOR_BG = 0xFFEAF1FF;      // 门形图示底（已选门）
-    private static final int C_DOOR_BG_OFF = 0xFFE7EAF0;  // 门形图示底（未选门）
-    private static final int C_BLUE_SOFT = 0xFFE3EAF6;    // 浅蓝按钮底（发送验证码 / 工具条）
-    private static final int C_RETRY_BG = 0xFFFFF1E9;     // 「重试连接」按钮底
-    private static final int C_RETRY_INK = 0xFF8A3B12;    // 「重试连接」按钮文字
-    private static final int C_TOGGLE_BG = 0xFFEEF2F9;    // 日志入口底
-    private static final int C_TOGGLE_EDGE = 0xFF9DB4DC;  // 日志入口描边
-    private static final int C_LOGOUT_EDGE = 0xFFF4C3BE;  // 退出胶囊描边
-    private static final int C_CARD_EDGE = 0xFFE2E8F2;    // 白卡描边
-    private static final int C_PILL_ON = 0xFFE6F4EA;      // 在线胶囊底
-    private static final int C_PILL_OFF = 0xFFFCEBEB;     // 离线胶囊底
-    private static final int C_LAST_BG = 0xFFF4F8FF;      // 「上次开门」摘要条底
-    private static final int C_LAST_EDGE = 0xFFE3ECFA;    // 「上次开门」摘要条描边
-    private static final int C_METRIC_DIV = 0xFFEDF1F7;   // 三格指标分隔线
-    private static final int C_HAIRLINE = 0xFFEEF1F6;     // 卡内 1px 分隔线
-    private static final int C_BANNER_1 = 0xFF16823C;     // 「已开门」横幅渐变起
-    private static final int C_BANNER_2 = 0xFF0E5C29;     // 「已开门」横幅渐变止
-    private static final int C_BANNER_EDGE = 0xFF0B4A22;  // 横幅描边
-    private static final int C_BANNER_SUB = 0xFFD7F0DE;   // 横幅副文案
-    private static final int C_HANDLE_OFF = 0xFFAAB3C2;   // 门把手（未选门灰）
-    // 开门按钮三态渐变（默认红 / 按压深红 / 禁用灰）
-    private static final int C_BTN_TOP = 0xFFF0463C;
-    private static final int C_BTN_BOTTOM = 0xFFC5221F;
-    private static final int C_BTN_EDGE = 0xFFA51B18;
-    private static final int C_BTN_PRESS_BOTTOM = 0xFF8E1512;
-    private static final int C_BTN_PRESS_EDGE = 0xFF7A100E;
-    private static final int C_BTN_OFF_BOTTOM = 0xFF7C899D;
+    private int C_BG, C_SURFACE, C_INK, C_SUB, C_MUTED, C_FAINT;
+    private int C_BLUE, C_BLUE_FILL, C_RED, C_GREEN, C_NAVY, C_STEEL, C_FAIL;
+    private int C_DOOR_BG, C_DOOR_BG_OFF, C_BLUE_SOFT, C_STROKE, C_RETRY_BG, C_RETRY_INK;
+    private int C_TOGGLE_BG, C_TOGGLE_EDGE, C_LOGOUT_EDGE, C_CARD_EDGE;
+    private int C_PILL_ON, C_PILL_OFF, C_LAST_BG, C_LAST_EDGE;
+    private int C_METRIC_DIV, C_HAIRLINE, C_BANNER_1, C_BANNER_2, C_BANNER_EDGE, C_BANNER_SUB;
+    private int C_HANDLE_OFF, C_BTN_TOP, C_BTN_BOTTOM, C_BTN_EDGE, C_BTN_PRESS_BOTTOM;
+    private int C_BTN_PRESS_EDGE, C_BTN_OFF_BOTTOM;
+
+    private void loadPalette() {
+        C_BG = getColor(R.color.q_bg);
+        C_SURFACE = getColor(R.color.q_surface);
+        C_INK = getColor(R.color.q_ink);
+        C_SUB = getColor(R.color.q_sub);
+        C_MUTED = getColor(R.color.q_muted);
+        C_FAINT = getColor(R.color.q_faint);
+        C_BLUE = getColor(R.color.q_blue);
+        C_BLUE_FILL = getColor(R.color.q_blue_fill);
+        C_RED = getColor(R.color.q_red);
+        C_GREEN = getColor(R.color.q_green);
+        C_NAVY = getColor(R.color.q_navy);
+        C_STEEL = getColor(R.color.q_steel);
+        C_FAIL = getColor(R.color.q_fail);
+        C_DOOR_BG = getColor(R.color.q_door_bg);
+        C_DOOR_BG_OFF = getColor(R.color.q_door_bg_off);
+        C_BLUE_SOFT = getColor(R.color.q_blue_soft);
+        C_STROKE = getColor(R.color.q_edge_strong);
+        C_RETRY_BG = getColor(R.color.q_retry_bg);
+        C_RETRY_INK = getColor(R.color.q_retry_ink);
+        C_TOGGLE_BG = getColor(R.color.q_toggle_bg);
+        C_TOGGLE_EDGE = getColor(R.color.q_toggle_edge);
+        C_LOGOUT_EDGE = getColor(R.color.q_logout_edge);
+        C_CARD_EDGE = getColor(R.color.q_edge);
+        C_PILL_ON = getColor(R.color.q_pill_on);
+        C_PILL_OFF = getColor(R.color.q_pill_off);
+        C_LAST_BG = getColor(R.color.q_last_bg);
+        C_LAST_EDGE = getColor(R.color.q_last_edge);
+        C_METRIC_DIV = getColor(R.color.q_hairline);
+        C_HAIRLINE = getColor(R.color.q_hairline);
+        C_BANNER_1 = getColor(R.color.q_banner_1);
+        C_BANNER_2 = getColor(R.color.q_banner_2);
+        C_BANNER_EDGE = getColor(R.color.q_banner_edge);
+        C_BANNER_SUB = getColor(R.color.q_banner_sub);
+        C_HANDLE_OFF = getColor(R.color.q_handle_off);
+        C_BTN_TOP = getColor(R.color.q_btn_top);
+        C_BTN_BOTTOM = getColor(R.color.q_btn_bottom);
+        C_BTN_EDGE = getColor(R.color.q_btn_edge);
+        C_BTN_PRESS_BOTTOM = getColor(R.color.q_btn_press_bottom);
+        C_BTN_PRESS_EDGE = getColor(R.color.q_btn_press_edge);
+        C_BTN_OFF_BOTTOM = getColor(R.color.q_btn_off_bottom);
+    }
 
     /** 记录卡默认展示行数；点「展开」一次展开到 20 行（再多对「上次开成没成」没有意义）。 */
     private static final int DEFAULT_RECORDS = 3;
@@ -181,6 +197,14 @@ public class MainActivity extends Activity {
     private GradientDrawable doorCardBg;
     private GradientDrawable doorPlateBg;
     private GradientDrawable doorHandleBg;
+    /**
+     * 门形图示本体：纯色块拼的图形，读屏原本什么也读不到。
+     * 现在按「有没有选门 / 门在不在线」给它一句 contentDescription。
+     */
+    private View doorGlyph;
+
+    /** 未登录时的「登录后可以做什么」说明卡：填掉原来近半屏的空白。 */
+    private LinearLayout guestCard;
 
     /** 登录表单整体（未登录时显示）；已登录时整块隐藏。 */
     private LinearLayout loginBox;
@@ -215,6 +239,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         createT0 = System.currentTimeMillis();
         super.onCreate(savedInstanceState);
+        loadPalette();              // 资源色必须在 super.onCreate 之后取
+        applyStatusBarTint();
         AppLog.init(this);
         Prefs.migrateSecureFields(this);   // 历史明文凭证一次性升级为 Keystore 密文（幂等、不丢数据）
         QinlinApi.setOpenid(Prefs.openid(this));
@@ -382,16 +408,82 @@ public class MainActivity extends Activity {
         return Ui.dp(this, v);
     }
 
+    /**
+     * 状态栏 / 导航栏与页面同色，图标颜色跟着明暗翻转。
+     *
+     * <p>旧版直接继承系统 Theme.Material.Light.NoActionBar，状态栏保留默认灰 #757575，
+     * 压在 #F5F7FB 的页面上像一条没做完的带子——这是审计里最扎眼的一条。
+     * 主题里已声明过一次（API 27+ 生效），这里直接用系统 UI 标志再设一遍：
+     * 一是盖住个别 ROM 对主题项的改写，二是 {@code windowLightNavigationBar}
+     * 属性要 API 27，而 {@code SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR} 常量 API 26 就有，
+     * 用代码设能让 minSdk 26 的机器也拿到浅色导航栏图标。</p>
+     */
+    private void applyStatusBarTint() {
+        try {
+            getWindow().setStatusBarColor(C_BG);
+            getWindow().setNavigationBarColor(C_BG);
+            boolean night = (getResources().getConfiguration().uiMode
+                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            if (night) {
+                flags &= ~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                        | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            } else {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                        | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        } catch (Throwable t) {
+            AppLog.w(AppLog.UI, "系统栏着色失败：" + t);
+        }
+    }
+
+    /**
+     * 边衬适配：把状态栏 / 导航栏 / 刘海的高度加到根容器内边距上。
+     *
+     * <p>targetSdk 33 下系统默认让内容避让系统栏（这些 insets 已被 DecorView 消费，
+     * 读到的就是 0，行为与改动前完全一致）；但 targetSdk 升到 35 会强制 edge-to-edge，
+     * 那时内容会直接压到状态栏底下。提前把这条通路接好，将来只改 targetSdk 即可。</p>
+     */
+    private void applyWindowInsets(final View root) {
+        final int baseL = root.getPaddingLeft();
+        final int baseT = root.getPaddingTop();
+        final int baseR = root.getPaddingRight();
+        final int baseB = root.getPaddingBottom();
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                // 用旧版 getter：API 26 起一直可用，且被消费时明确返回 0。
+                // 不引用 WindowInsets.Type（API 30 才有的类），避免低版本校验期找不到类。
+                v.setPadding(baseL + insets.getSystemWindowInsetLeft(),
+                        baseT + insets.getSystemWindowInsetTop(),
+                        baseR + insets.getSystemWindowInsetRight(),
+                        baseB + insets.getSystemWindowInsetBottom());
+                return insets;
+            }
+        });
+        root.requestApplyInsets();
+    }
+
     private TextView label(String text, int sizeSp, int color, boolean bold) {
         return Ui.label(this, text, sizeSp, color, bold);
     }
 
+    /**
+     * 通用次要按钮：圆角 12dp + 系统涟漪。
+     *
+     * <p>旧实现 {@code setBackgroundColor(bg)} 会把 Button 自带的 StateList（含 ripple）
+     * 整个换掉，于是登录页最重要的两个按钮是方角、无按下态的，和全站圆角容器割裂。
+     * 现在统一走 {@link Ui#rippled}：圆角内容 + 裁在圆角内的涟漪。</p>
+     */
     private Button button(String text, int bg, int fg) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
         b.setTextColor(fg);
-        b.setBackgroundColor(bg);
+        b.setTextSize(Ui.T_BODY);
+        b.setBackground(Ui.rippled(this, bg, Ui.R_MD, 0));
+        b.setMinHeight(dp(46));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(8);
@@ -407,19 +499,19 @@ public class MainActivity extends Activity {
         GradientDrawable normal = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[] { C_BTN_TOP, C_BTN_BOTTOM });
-        normal.setCornerRadius(dp(18));
+        normal.setCornerRadius(dp(Ui.R_LG));
         normal.setStroke(dp(1), C_BTN_EDGE);
 
         GradientDrawable pressed = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[] { C_BTN_BOTTOM, C_BTN_PRESS_BOTTOM });
-        pressed.setCornerRadius(dp(18));
+        pressed.setCornerRadius(dp(Ui.R_LG));
         pressed.setStroke(dp(2), C_BTN_PRESS_EDGE);
 
         GradientDrawable disabled = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[] { C_FAINT, C_BTN_OFF_BOTTOM });
-        disabled.setCornerRadius(dp(18));
+        disabled.setCornerRadius(dp(Ui.R_LG));
         disabled.setStroke(dp(1), C_STEEL);
 
         StateListDrawable s = new StateListDrawable();
@@ -507,20 +599,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 日志工具条小按钮：等宽横排，避免挤占开门区。 */
-    private Button toolButton(String text, int bg, int fg) {
-        Button b = button(text, bg, fg);
-        b.setTextSize(11);
-        b.setPadding(dp(4), dp(6), dp(4), dp(6));
-        b.setMinWidth(0);
-        b.setMinimumWidth(0);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lp.setMargins(dp(2), dp(6), dp(2), 0);
-        b.setLayoutParams(lp);
-        return b;
-    }
-
     /**
      * 门形图示：浅蓝圆角方块 + 门轮廓 + 红色把手。
      * 外框与门板的描边色由 refreshDoorLabel() 按「是否已选门」切换，
@@ -532,13 +610,13 @@ public class MainActivity extends Activity {
 
         doorCardBg = new GradientDrawable();
         doorCardBg.setColor(C_DOOR_BG);
-        doorCardBg.setCornerRadius(dp(15));
+        doorCardBg.setCornerRadius(dp(Ui.R_LG));
         doorCardBg.setStroke(dp(2), C_BLUE);
         icon.setBackground(doorCardBg);
 
         doorPlateBg = new GradientDrawable();
         doorPlateBg.setColor(Color.TRANSPARENT);
-        doorPlateBg.setCornerRadius(dp(3));
+        doorPlateBg.setCornerRadius(dp(Ui.R_SM));
         doorPlateBg.setStroke(dp(2), C_BLUE);
         View plate = new View(this);
         plate.setBackground(doorPlateBg);
@@ -554,6 +632,9 @@ public class MainActivity extends Activity {
         klp.leftMargin = dp(18);
         klp.topMargin = dp(6);
         icon.addView(knob, klp);
+        // 图示是纯色块拼的，读屏默认读不到任何信息；给一句状态描述，随选中态更新。
+        icon.setContentDescription("门形图示：还没有选择门");
+        doorGlyph = icon;
         return icon;
     }
 
@@ -569,7 +650,7 @@ public class MainActivity extends Activity {
         // ---- 1. 顶部：未登录 = 品牌 + 登录表单；已登录 = 一行账号 + 小区名 + 退出 ----
         brandBox = new LinearLayout(this);
         brandBox.setOrientation(LinearLayout.VERTICAL);
-        brandBox.addView(label("qinlin · 无广告", 21, C_INK, true));
+        brandBox.addView(label("qinlin · 无广告", Ui.T_HEADLINE, C_INK, true));
         TextView sub = label("手机本机直连云端网关\n无服务器 / 无域名 / 无广告 SDK",
                 12, C_SUB, false);
         sub.setPadding(0, dp(4), 0, dp(6));
@@ -578,9 +659,15 @@ public class MainActivity extends Activity {
         loginBox = new LinearLayout(this);
         loginBox.setOrientation(LinearLayout.VERTICAL);
         loginBox.setPadding(0, dp(4), 0, 0);
-        loginBox.addView(label("手机号", 14, C_INK, true));
+        // 标签与输入框建立 labelFor 关联：无障碍树里两者原本是孤立节点，
+        // 读屏只会念 hint，念不出「这是手机号还是验证码」。
+        TextView phoneLab = label("手机号", Ui.T_BODY, C_INK, true);
+        loginBox.addView(phoneLab);
         phoneEt = new EditText(this);
+        phoneEt.setId(View.generateViewId());
         phoneEt.setHint("11 位手机号");
+        phoneEt.setContentDescription("手机号，11 位数字");
+        phoneLab.setLabelFor(phoneEt.getId());
         phoneEt.setInputType(InputType.TYPE_CLASS_PHONE);
         // 长度硬限制：粘贴超长字符串时直接截断，省得先报错再手改
         phoneEt.setFilters(new android.text.InputFilter[]{
@@ -590,6 +677,7 @@ public class MainActivity extends Activity {
 
         codeEt = new EditText(this);
         codeEt.setHint("短信验证码");
+        codeEt.setContentDescription("短信验证码，4 到 8 位数字");
         codeEt.setInputType(InputType.TYPE_CLASS_NUMBER);
         codeEt.setFilters(new android.text.InputFilter[]{
                 new android.text.InputFilter.LengthFilter(8)});
@@ -601,7 +689,7 @@ public class MainActivity extends Activity {
         row.setPadding(0, dp(6), 0, 0);
         smsBtn = button("发送验证码", C_BLUE_SOFT,
                 C_NAVY);
-        loginBtn = button("登录", C_BLUE, Color.WHITE);
+        loginBtn = button("登录", C_BLUE_FILL, Color.WHITE);
         LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         half.setMargins(0, dp(6), dp(4), 0);
@@ -644,6 +732,13 @@ public class MainActivity extends Activity {
         page.addView(accountBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // ---- 1.5 未登录说明卡：登录表单下方原本空掉近半屏，这里用三步说明填住 ----
+        guestCard = buildGuestCard();
+        LinearLayout.LayoutParams guestLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        guestLp.topMargin = dp(18);
+        page.addView(guestCard, guestLp);
+
         // ---- 2. 开门卡 ----
         openArea = new LinearLayout(this);
         openArea.setOrientation(LinearLayout.VERTICAL);
@@ -661,7 +756,7 @@ public class MainActivity extends Activity {
 
         // ---- 4. 开门按钮：整屏最大的触控区，高度取屏幕高 13%（96~116dp）----
         openBtn = button("开  门", Color.TRANSPARENT, Color.WHITE);
-        openBtn.setTextSize(26);
+        openBtn.setTextSize(Ui.T_DISPLAY);
         openBtn.setTypeface(Typeface.DEFAULT_BOLD);
         openBtn.setBackground(makeOpenButtonDrawable());
         int screenH = getResources().getDisplayMetrics().heightPixels;
@@ -682,6 +777,17 @@ public class MainActivity extends Activity {
         openBtn.setOnTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View v, MotionEvent e) {
                 if (!v.isEnabled()) return false;
+                // 系统开了「移除动画」就不做缩放下压：动画时长缩放为 0 时它不会消失，
+                // 而是让按钮一步缩到 97% 停在那里——一个静止的变形，比不动更碍眼。
+                // 触觉反馈和涟漪不受影响，按下的确认感仍然在。
+                if (!Ui.motionOn(MainActivity.this)) {
+                    if (e.getAction() == MotionEvent.ACTION_DOWN) {
+                        // 按住期间用户改了系统设置时可能残留缩放，按下这一下顺手复位。
+                        v.setScaleX(1f);
+                        v.setScaleY(1f);
+                    }
+                    return false;
+                }
                 if (e.getAction() == MotionEvent.ACTION_DOWN) {
                     v.animate().cancel();
                     v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).start();
@@ -709,12 +815,12 @@ public class MainActivity extends Activity {
 
         logToggle = new Button(this);
         logToggle.setAllCaps(false);
-        logToggle.setTextSize(13);
+        logToggle.setTextSize(Ui.T_BODY);
         logToggle.setTypeface(Typeface.DEFAULT_BOLD);
         logToggle.setTextColor(C_NAVY);
         GradientDrawable toggleBg = new GradientDrawable();
         toggleBg.setColor(C_TOGGLE_BG);
-        toggleBg.setCornerRadius(dp(12));
+        toggleBg.setCornerRadius(dp(Ui.R_MD));
         toggleBg.setStroke(dp(1), C_TOGGLE_EDGE);
         logToggle.setBackground(toggleBg);
         logToggle.setMinHeight(dp(46));
@@ -731,7 +837,7 @@ public class MainActivity extends Activity {
         });
         updateLogToggleText();
         // 未登录态的组件设置入口（详见字段注释）：默认隐藏，由 applyLoginStateUi 按需显示
-        widgetCfgLink = label("组件设置（改名 / 换色 / 绑门）▸", 11, C_BLUE, true);
+        widgetCfgLink = label("组件设置（改名 / 换色 / 绑门）▸", Ui.T_CAPTION, C_BLUE, true);
         widgetCfgLink.setGravity(Gravity.CENTER);
         widgetCfgLink.setPadding(0, dp(10), 0, dp(2));
         widgetCfgLink.setOnClickListener(new View.OnClickListener() {
@@ -771,7 +877,9 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { dismissOpenedBanner(); }
         });
         rootLayer.addView(openBanner);
+        rootLayer.setBackgroundColor(C_BG);   // 边衬留白处也要是页面底色
         setContentView(rootLayer);
+        applyWindowInsets(rootLayer);        // 见方法注释：targetSdk 33 下读到 0，不影响现有布局
 
         refreshStats();         // 记录 / 指标首帧就位（本机数据，不联网）
         centerOpenButton();     // 首帧布局完成后校正按钮位置
@@ -790,19 +898,19 @@ public class MainActivity extends Activity {
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        accountTv = label("● 已登录", 11, C_GREEN, true);
+        accountTv = label("● 已登录", Ui.T_CAPTION, C_GREEN, true);
         info.addView(accountTv);
-        communityTv = label("小区：—", 18, C_INK, true);
+        communityTv = label("小区：—", Ui.T_TITLE, C_INK, true);
         communityTv.setPadding(0, dp(3), 0, 0);
         communityTv.setSingleLine(true);
         communityTv.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(communityTv);
 
-        TextView logout = label("退出", 11, C_RED, true);
-        logout.setTextSize(11.5f);
+        TextView logout = label("退出", Ui.T_CAPTION, C_RED, true);
+        logout.setTextSize(Ui.T_BODY_S);
         GradientDrawable pill = new GradientDrawable();
-        pill.setColor(Color.WHITE);
-        pill.setCornerRadius(dp(99));
+        pill.setColor(C_SURFACE);
+        pill.setCornerRadius(dp(Ui.R_PILL));
         pill.setStroke(dp(1), C_LOGOUT_EDGE);
         logout.setBackground(pill);
         logout.setGravity(Gravity.CENTER);
@@ -820,14 +928,66 @@ public class MainActivity extends Activity {
         return box;
     }
 
+    /**
+     * 未登录说明卡：登录表单下方原先是近半屏空白（底部弹性留白把日志入口推到了屏幕最下面）。
+     * 这里用三步说明把中间填住——既解释了这个 App 怎么用，也顺带回答了
+     * 「为什么不用装官方 App」「数据存哪儿」这两个首次使用必然会问的问题。
+     */
+    private LinearLayout buildGuestCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(Ui.roundRect(this, C_SURFACE, Ui.R_LG, 1, C_CARD_EDGE));
+        card.setElevation(dp(1));
+
+        card.addView(label("登录后可以做什么", Ui.T_BODY, C_INK, true));
+        card.addView(guestStep("1", "登录", "手机号 + 短信验证码，凭证只存本机"));
+        card.addView(guestStep("2", "选门", "挑一扇要控制的门，设为默认开门"));
+        card.addView(guestStep("3", "开门", "App 内一键，或桌面小组件直接点"));
+
+        TextView note = label("手机直连云端网关 · 不经过第三方服务器 · 无广告 SDK · 无后台常驻",
+                Ui.T_CAPTION, C_MUTED, false);
+        note.setPadding(0, dp(13), 0, 0);
+        note.setLineSpacing(dp(2), 1f);
+        card.addView(note);
+        return card;
+    }
+
+    /** 说明卡里的一行：圆形序号 + 标题 + 一句说明。 */
+    private View guestStep(String num, String title, String desc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dp(11);
+        row.setLayoutParams(rowLp);
+        row.setGravity(Gravity.TOP);
+
+        TextView n = label(num, Ui.T_CAPTION, C_NAVY, true);
+        n.setGravity(Gravity.CENTER);
+        n.setBackground(Ui.roundRect(this, C_BLUE_SOFT, Ui.R_PILL, 0, 0));
+        row.addView(n, new LinearLayout.LayoutParams(dp(22), dp(22)));
+
+        LinearLayout txt = new LinearLayout(this);
+        txt.setOrientation(LinearLayout.VERTICAL);
+        txt.setPadding(dp(10), 0, 0, 0);
+        txt.addView(label(title, Ui.T_BODY_S, C_INK, true));
+        TextView d = label(desc, Ui.T_CAPTION, C_MUTED, false);
+        d.setPadding(0, dp(2), 0, 0);
+        txt.addView(d);
+        row.addView(txt, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
     /** 开门卡：一屏内交代「开哪扇门 / 上次怎样 / 今天开了几次 / 怎么换门」。 */
     private LinearLayout buildDoorCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(13), dp(14), dp(11));
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(14));
+        bg.setColor(C_SURFACE);
+        bg.setCornerRadius(dp(Ui.R_LG));
         bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(1));
@@ -841,23 +1001,23 @@ public class MainActivity extends Activity {
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         info.setPadding(dp(13), 0, dp(4), 0);
-        selectedDoorTv = label("尚未选择门", 22, C_INK, true);
+        selectedDoorTv = label("尚未选择门", Ui.T_HEADLINE, C_INK, true);
         selectedDoorTv.setMaxLines(2);
         selectedDoorTv.setLineSpacing(0, 1.1f);
         info.addView(selectedDoorTv);
-        doorStateTv = label("", 12, C_SUB, false);
-        doorStateTv.setTextSize(11.5f);
+        doorStateTv = label("", Ui.T_BODY_S, C_SUB, false);
+        doorStateTv.setTextSize(Ui.T_BODY_S);
         doorStateTv.setMaxLines(2);
         doorStateTv.setPadding(0, dp(5), 0, 0);
         info.addView(doorStateTv);
         row1.addView(info, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        doorTagTv = label("在线", 11, C_GREEN, true);
-        doorTagTv.setTextSize(10.5f);
+        doorTagTv = label("在线", Ui.T_CAPTION, C_GREEN, true);
+        doorTagTv.setTextSize(Ui.T_CAPTION);
         onlinePillBg = new GradientDrawable();
         onlinePillBg.setColor(C_PILL_ON);
-        onlinePillBg.setCornerRadius(dp(99));
+        onlinePillBg.setCornerRadius(dp(Ui.R_PILL));
         doorTagTv.setBackground(onlinePillBg);
         doorTagTv.setPadding(dp(9), dp(3), dp(9), dp(3));
         doorTagTv.setVisibility(View.GONE);
@@ -872,7 +1032,7 @@ public class MainActivity extends Activity {
         lastRow.setPadding(dp(11), dp(9), dp(11), dp(9));
         GradientDrawable lastBg = new GradientDrawable();
         lastBg.setColor(C_LAST_BG);
-        lastBg.setCornerRadius(dp(10));
+        lastBg.setCornerRadius(dp(Ui.R_MD));
         lastBg.setStroke(dp(1), C_LAST_EDGE);
         lastRow.setBackground(lastBg);
         LinearLayout.LayoutParams lastLp = new LinearLayout.LayoutParams(
@@ -880,14 +1040,14 @@ public class MainActivity extends Activity {
         lastLp.topMargin = dp(11);
         card.addView(lastRow, lastLp);
 
-        lastRow.addView(label("上次开门", 11, C_SUB, false));
-        lastOpenTv = label("暂无记录", 12, C_MUTED, true);
+        lastRow.addView(label("上次开门", Ui.T_CAPTION, C_SUB, false));
+        lastOpenTv = label("暂无记录", Ui.T_BODY_S, C_MUTED, true);
         lastOpenTv.setSingleLine(true);
         lastOpenTv.setEllipsize(TextUtils.TruncateAt.END);
         lastOpenTv.setPadding(dp(8), 0, 0, 0);
         lastRow.addView(lastOpenTv, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        lastMsTv = label("", 11, C_GREEN, true);
+        lastMsTv = label("", Ui.T_CAPTION, C_GREEN, true);
         lastRow.addView(lastMsTv);
 
         // 三格指标：竖分隔线 + 等分，没有额外一层卡片边框
@@ -908,12 +1068,12 @@ public class MainActivity extends Activity {
         LinearLayout warn = new LinearLayout(this);
         warn.setOrientation(LinearLayout.HORIZONTAL);
         warn.setPadding(0, dp(8), 0, 0);
-        TextView warnKey = label("注意", 10, C_FAIL, true);
-        warnKey.setTextSize(10.5f);
+        TextView warnKey = label("注意", Ui.T_CAPTION, C_FAIL, true);
+        warnKey.setTextSize(Ui.T_CAPTION);
         warn.addView(warnKey);
         TextView warnTv = label("成功响应仅表示平台已接受指令，请现场确认门是否打开。",
                 10, C_MUTED, false);
-        warnTv.setTextSize(10.5f);
+        warnTv.setTextSize(Ui.T_CAPTION);
         warnTv.setLineSpacing(dp(2), 1f);
         LinearLayout.LayoutParams warnLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -927,21 +1087,21 @@ public class MainActivity extends Activity {
         bottom.setOrientation(LinearLayout.HORIZONTAL);
         bottom.setGravity(Gravity.CENTER_VERTICAL);
         bottom.setPadding(0, dp(7), 0, 0);
-        doorMetaTv = label("", 10, C_FAINT, false);
-        doorMetaTv.setTextSize(10.5f);
+        doorMetaTv = label("", Ui.T_CAPTION, C_FAINT, false);
+        doorMetaTv.setTextSize(Ui.T_CAPTION);
         doorMetaTv.setSingleLine(true);
         doorMetaTv.setEllipsize(TextUtils.TruncateAt.END);
         bottom.addView(doorMetaTv, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView widgetCfgTv = label("组件设置 ▸", 11, C_BLUE, true);
-        widgetCfgTv.setTextSize(11f);
+        TextView widgetCfgTv = label("组件设置 ▸", Ui.T_CAPTION, C_BLUE, true);
+        widgetCfgTv.setTextSize(Ui.T_CAPTION);
         widgetCfgTv.setPadding(dp(10), dp(6), dp(6), dp(6));
         widgetCfgTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { openWidgetConfig(); }
         });
         bottom.addView(widgetCfgTv);
-        TextView switchTv = label("切换门 ▸", 11, C_BLUE, true);
-        switchTv.setTextSize(11.5f);
+        TextView switchTv = label("切换门 ▸", Ui.T_CAPTION, C_BLUE, true);
+        switchTv.setTextSize(Ui.T_BODY_S);
         switchTv.setPadding(dp(8), dp(6), 0, dp(6));
         switchTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { openDoorList(); }
@@ -972,8 +1132,8 @@ public class MainActivity extends Activity {
     private TextView addMetric(LinearLayout parent, String key) {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.addView(label(key, 10, C_MUTED, false));
-        TextView v = label("—", 15, C_INK, true);
+        col.addView(label(key, Ui.T_CAPTION, C_MUTED, false));
+        TextView v = label("—", Ui.T_TITLE, C_INK, true);
         v.setPadding(0, dp(3), 0, 0);
         col.addView(v);
         parent.addView(col, new LinearLayout.LayoutParams(
@@ -1006,8 +1166,8 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(14), dp(10), dp(14), dp(8));
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(14));
+        bg.setColor(C_SURFACE);
+        bg.setCornerRadius(dp(Ui.R_LG));
         bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(1));
@@ -1015,12 +1175,12 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = label("最近开门记录", 12, C_INK, true);
-        title.setTextSize(12.5f);
+        TextView title = label("最近开门记录", Ui.T_BODY_S, C_INK, true);
+        title.setTextSize(Ui.T_BODY);
         head.addView(title, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        recordsMoreTv = label("展开 ▸", 11, C_BLUE, true);
-        recordsMoreTv.setTextSize(11.5f);
+        recordsMoreTv = label("展开 ▸", Ui.T_CAPTION, C_BLUE, true);
+        recordsMoreTv.setTextSize(Ui.T_BODY_S);
         recordsMoreTv.setPadding(dp(12), dp(6), 0, dp(6));
         recordsMoreTv.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -1046,8 +1206,8 @@ public class MainActivity extends Activity {
         recordsBox.removeAllViews();
         List<OpenRecord.Item> items = OpenRecord.recent(this, recordsLimit);
         if (items.isEmpty()) {
-            TextView empty = label("还没有开门记录，打开一次门就会记在这里", 12, C_MUTED, false);
-            empty.setTextSize(11.5f);
+            TextView empty = label("还没有开门记录，打开一次门就会记在这里", Ui.T_BODY_S, C_MUTED, false);
+            empty.setTextSize(Ui.T_BODY_S);
             empty.setPadding(0, dp(11), 0, dp(3));
             recordsBox.addView(empty);
             if (recordsMoreTv != null) recordsMoreTv.setVisibility(View.GONE);
@@ -1070,7 +1230,7 @@ public class MainActivity extends Activity {
             dotLp.rightMargin = dp(9);
             row.addView(dot, dotLp);
 
-            TextView time = label(OpenRecord.relative(it.at), 11, C_SUB, false);
+            TextView time = label(OpenRecord.relative(it.at), Ui.T_CAPTION, C_SUB, false);
             time.setSingleLine(true);
             row.addView(time, new LinearLayout.LayoutParams(dp(74), ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -1083,7 +1243,7 @@ public class MainActivity extends Activity {
             } else {
                 text = (it.note.length() > 0 ? "失败 · " + it.note : "失败") + tail;
             }
-            TextView result = label(text, 12, it.ok ? C_INK : C_FAIL, false);
+            TextView result = label(text, Ui.T_BODY_S, it.ok ? C_INK : C_FAIL, false);
             result.setSingleLine(true);
             result.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams resultLp = new LinearLayout.LayoutParams(
@@ -1091,7 +1251,7 @@ public class MainActivity extends Activity {
             resultLp.leftMargin = dp(4);
             row.addView(result, resultLp);
 
-            TextView ms = label(it.ok ? OpenRecord.seconds(it.ms) + "s" : "—", 11, C_MUTED, false);
+            TextView ms = label(it.ok ? OpenRecord.seconds(it.ms) + "s" : "—", Ui.T_CAPTION, C_MUTED, false);
             row.addView(ms);
             recordsBox.addView(row);
             if (!lastRow) recordsBox.addView(divider(0));
@@ -1172,7 +1332,7 @@ public class MainActivity extends Activity {
         }
         TextView t = label("网关直连 · " + ver + " · 无广告 · 无第三方 SDK",
                 10, C_FAINT, false);
-        t.setTextSize(10.5f);
+        t.setTextSize(Ui.T_CAPTION);
         t.setGravity(Gravity.CENTER);
         t.setPadding(0, dp(7), 0, dp(2));
         return t;
@@ -1187,7 +1347,7 @@ public class MainActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setOrientation(GradientDrawable.Orientation.LEFT_RIGHT);
         bg.setColors(new int[] { C_BANNER_1, C_BANNER_2 });
-        bg.setCornerRadius(dp(14));
+        bg.setCornerRadius(dp(Ui.R_LG));
         bg.setStroke(dp(1), C_BANNER_EDGE);
         bar.setBackground(bg);
         bar.setElevation(dp(12));
@@ -1197,7 +1357,7 @@ public class MainActivity extends Activity {
         mark.setTextSize(20);
         mark.setTypeface(Typeface.DEFAULT_BOLD);
         mark.setGravity(Gravity.CENTER);
-        mark.setTextColor(C_GREEN);
+        mark.setTextColor(C_BANNER_2);   // 白圆上的深绿勾；不能用 C_GREEN，深色下会变成亮绿
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
         circle.setColor(Color.WHITE);
@@ -1207,8 +1367,8 @@ public class MainActivity extends Activity {
         LinearLayout text = new LinearLayout(this);
         text.setOrientation(LinearLayout.VERTICAL);
         text.setPadding(dp(12), 0, 0, 0);
-        text.addView(label("已开门", 18, Color.WHITE, true));
-        TextView sub = label("平台已接受指令 · 请现场确认门是否打开", 12,
+        text.addView(label("已开门", Ui.T_TITLE, Color.WHITE, true));
+        TextView sub = label("平台已接受指令 · 请现场确认门是否打开", Ui.T_BODY_S,
                 C_BANNER_SUB, false);
         sub.setPadding(0, dp(2), 0, 0);
         text.addView(sub);
@@ -1226,9 +1386,15 @@ public class MainActivity extends Activity {
                 if (openBanner == null) return;
                 openBanner.setVisibility(View.VISIBLE);
                 openBanner.animate().cancel();
-                openBanner.setAlpha(0f);
-                openBanner.setTranslationY(-dp(90));
-                openBanner.animate().alpha(1f).translationY(0f).setDuration(220).start();
+                // 关掉系统动画：直接摆到位，不做「先瞬移到屏幕外再瞬移回来」的垂帘动作。
+                if (!Ui.motionOn(MainActivity.this)) {
+                    openBanner.setAlpha(1f);
+                    openBanner.setTranslationY(0f);
+                } else {
+                    openBanner.setAlpha(0f);
+                    openBanner.setTranslationY(-dp(90));
+                    openBanner.animate().alpha(1f).translationY(0f).setDuration(220).start();
+                }
                 uiHandler.postDelayed(hideBannerTask, 3500);
             }
         });
@@ -1239,6 +1405,13 @@ public class MainActivity extends Activity {
         uiHandler.removeCallbacks(hideBannerTask);
         if (openBanner == null || openBanner.getVisibility() != View.VISIBLE) return;
         openBanner.animate().cancel();
+        if (!Ui.motionOn(this)) {
+            // 一步收起：不留 200ms 的空转，也避免「先瞬移到顶部」的闪烁。
+            openBanner.setAlpha(0f);
+            openBanner.setTranslationY(0f);
+            openBanner.setVisibility(View.GONE);
+            return;
+        }
         openBanner.animate().alpha(0f).translationY(-dp(90)).setDuration(200)
                 .withEndAction(new Runnable() {
                     @Override public void run() { openBanner.setVisibility(View.GONE); }
@@ -1429,6 +1602,9 @@ public class MainActivity extends Activity {
             retryBtn.setVisibility(!logged && expired ? View.VISIBLE : View.GONE);
         }
         brandBox.setVisibility(logged ? View.GONE : View.VISIBLE);
+        if (guestCard != null) {
+            guestCard.setVisibility(logged ? View.GONE : View.VISIBLE);
+        }
         accountBox.setVisibility(logged ? View.VISIBLE : View.GONE);
         // 开门区（门卡片）必须跟着登录态走：退出登录后旧账号的门名、在线状态和
         // 红色开门按钮留在界面上，既是误导（点了也开不了），也泄露了上一个账号的信息。
@@ -1606,7 +1782,8 @@ public class MainActivity extends Activity {
         toast(s);
     }
 
-    private void toast(final String s) { Ui.toast(this, s); }
+    /** 界面内提示统一走应用内提示条：贴底、可被读屏读到、连发不丢。 */
+    private void toast(final String s) { Ui.snack(this, s); }
 
     /**
      * 每次后台操作生成 traceId 并绑定线程：网络层的请求 / 响应 / 业务码 / 异常
@@ -1878,6 +2055,18 @@ public class MainActivity extends Activity {
         doorCardBg.setStroke(dp(2), (on ? C_BLUE : C_FAINT));
         doorPlateBg.setStroke(dp(2), (on ? C_BLUE : C_FAINT));
         doorHandleBg.setColor((on ? C_RED : C_HANDLE_OFF));
+        // 读屏用户看不到颜色变化，用一句描述把「能不能开」这件事说清楚
+        if (doorGlyph != null) {
+            String desc;
+            if (!on) {
+                desc = "门形图示：还没有选择门";
+            } else {
+                String online = Prefs.doorOnline(this);
+                boolean isOnline = "online".equalsIgnoreCase(online) || online.length() == 0;
+                desc = "门形图示：" + (isOnline ? "当前门在线，可以开门" : "当前门离线");
+            }
+            doorGlyph.setContentDescription(desc);
+        }
     }
 
     private void doOpen() {

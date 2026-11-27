@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  深色主题。资源系统对 style 是「整份覆盖」而不是逐项合并，
+  所以这里必须把 values/styles.xml 的每一项都重新写一遍，只改需要翻转的部分：
+
+  · AppTheme 换成 Dark 父主题，状态栏图标改为浅色（白字），这样系统对话框、
+    输入框下划线等框架控件也跟着变深，不再出现「深色页面里弹出白色对话框」。
+  · 三个浮层同样换成 Dark 父主题：浮层卡片自己的底色由 q_bg 决定，
+    父主题只影响窗口装饰与 AlertDialog。
+-->
+<resources>
+
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/q_bg</item>
+        <item name="android:statusBarColor">@color/q_bg</item>
+        <item name="android:navigationBarColor">@color/q_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/q_blue</item>
+    </style>
+
+    <style name="FloatingDoorList" parent="@android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.65</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+
+    <style name="FloatingLog" parent="@android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+    </style>
+
+</resources>

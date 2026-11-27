@@ -34,20 +34,30 @@ public class DoorListActivity extends Activity {
     /** 桌面小部件配置：带有效 appWidgetId 时，选门只绑定该小部件，不改全局默认门。 */
     public static final String EXTRA_WIDGET_ID = "widget_id";
 
-    /** 浮层配色：编译期常量，与 MainActivity 的调色板同源，不再逐处 Color.parseColor。 */
-    private static final int C_INK = 0xFF16233B;        // 标题深墨
-    private static final int C_NAVY = 0xFF1B3A6B;       // 按钮文字深蓝
-    private static final int C_STEEL = 0xFF6B7688;      // 「稍后再说」灰字
-    private static final int C_TIP = 0xFF607089;        // 顶部提示行
-    private static final int C_SUBTITLE = 0xFF3C587F;   // 小区副标题
-    private static final int C_STATUS_TEXT = 0xFF22304B;// 状态框正文
-    private static final int C_BLUE_SOFT = 0xFFE3EAF6;  // 浅蓝按钮底
-    private static final int C_STROKE = 0xFFC9D6EA;     // 常规浅描边
-    private static final int C_CARD_EDGE = 0xFFD6E2F5;  // 浮层卡片描边
-    private static final int C_SKIP_BG = 0xFFF1F3F7;    // 「稍后再说」按钮底
-    private static final int C_STATUS_BG = 0xFFE9EEF7;  // 状态框底
-    private static final int C_STATUS_EDGE = 0xFF9DB4DC;// 状态框描边
-    private static final int C_SEL_BLUE = 0xFF2563EB;   // 选中门蓝底
+    /**
+     * 浮层配色：与另外三个界面共用 res/values/colors.xml 的语义令牌，
+     * 深色模式由 values-night 自动接管，这里不再出现任何字面色值。
+     */
+    private int C_INK, C_NAVY, C_STEEL, C_TIP, C_SUBTITLE, C_STATUS_TEXT, C_SURFACE;
+    private int C_BLUE_SOFT, C_STROKE, C_CARD_EDGE, C_SKIP_BG, C_STATUS_BG, C_STATUS_EDGE;
+    private int C_BLUE_FILL;
+
+    private void loadPalette() {
+        C_INK = getColor(R.color.q_ink);
+        C_NAVY = getColor(R.color.q_navy);
+        C_STEEL = getColor(R.color.q_steel);
+        C_TIP = getColor(R.color.q_sub);
+        C_SUBTITLE = getColor(R.color.q_steel);
+        C_STATUS_TEXT = getColor(R.color.q_log_text);
+        C_SURFACE = getColor(R.color.q_surface);
+        C_BLUE_SOFT = getColor(R.color.q_blue_soft);
+        C_STROKE = getColor(R.color.q_edge_strong);
+        C_CARD_EDGE = getColor(R.color.q_edge);
+        C_SKIP_BG = getColor(R.color.q_skip_bg);
+        C_STATUS_BG = getColor(R.color.q_inset);
+        C_STATUS_EDGE = getColor(R.color.q_toggle_edge);
+        C_BLUE_FILL = getColor(R.color.q_blue_fill);
+    }
 
     private TextView subtitleTv;
     private TextView statusTv;
@@ -73,6 +83,7 @@ public class DoorListActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadPalette();
         AppLog.init(this);
         QinlinApi.setOpenid(Prefs.openid(this));
         QinlinApi.PREFERRED_COMM_MODE = Prefs.commMode(this);   // 沿用上次成功的小区请求姿势
@@ -121,7 +132,9 @@ public class DoorListActivity extends Activity {
         b.setText(text);
         b.setAllCaps(false);
         b.setTextColor(fg);
-        b.setBackgroundColor(bg);
+        b.setTextSize(Ui.T_BODY);
+        b.setBackground(Ui.rippled(this, bg, Ui.R_MD, 0));
+        b.setMinHeight(dp(46));
         b.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return b;
@@ -132,8 +145,8 @@ public class DoorListActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(18));
+        bg.setColor(C_SURFACE);
+        bg.setCornerRadius(dp(Ui.R_LG));
         bg.setStroke(dp(1), C_CARD_EDGE);
         card.setBackground(bg);
         card.setElevation(dp(14));
@@ -146,14 +159,14 @@ public class DoorListActivity extends Activity {
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         boolean widgetConfig = configuringWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID;
-        titleRow.addView(label(widgetConfig ? "为小组件选门" : onboarding ? "选择要控制的门" : "门列表", 21,
-                        C_INK, true),
+        titleRow.addView(label(widgetConfig ? "为小组件选门" : onboarding ? "选择要控制的门" : "门列表",
+                        Ui.T_HEADLINE, C_INK, true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        closeTv = label("✕ 关闭", 14, C_NAVY, true);
+        closeTv = label("✕ 关闭", Ui.T_BODY, C_NAVY, true);
         closeTv.setPadding(dp(18), dp(10), dp(18), dp(10));
         GradientDrawable closeBg = new GradientDrawable();
         closeBg.setColor(C_BLUE_SOFT);
-        closeBg.setCornerRadius(dp(10));
+        closeBg.setCornerRadius(dp(Ui.R_MD));
         closeBg.setStroke(dp(1), C_STROKE);
         closeTv.setBackground(closeBg);
         closeTv.setContentDescription("关闭门列表，返回主界面");
@@ -170,11 +183,11 @@ public class DoorListActivity extends Activity {
                         : onboarding
                             ? "首次登录 · 选一扇门作为默认开门，选好后直接进入主界面"
                             : "点一扇门即显示到主界面 · 点卡片外可收起",
-                12, C_TIP, false);
+                Ui.T_BODY_S, C_TIP, false);
         tip.setPadding(0, dp(2), 0, 0);
         card.addView(tip);
 
-        subtitleTv = label("小区：读取中…", 13, C_SUBTITLE, false);
+        subtitleTv = label("小区：读取中…", Ui.T_BODY, C_SUBTITLE, false);
         subtitleTv.setPadding(0, dp(8), 0, dp(6));
         card.addView(subtitleTv);
 
@@ -184,7 +197,7 @@ public class DoorListActivity extends Activity {
                 C_NAVY);
         GradientDrawable refreshBg = new GradientDrawable();
         refreshBg.setColor(C_BLUE_SOFT);
-        refreshBg.setCornerRadius(dp(10));
+        refreshBg.setCornerRadius(dp(Ui.R_MD));
         refreshBg.setStroke(dp(1), C_STROKE);
         refreshBtn.setBackground(refreshBg);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
@@ -219,11 +232,11 @@ public class DoorListActivity extends Activity {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(0, dp(8), 0, dp(16));
 
-        statusTv = label("正在读取门列表…", 14, C_STATUS_TEXT, false);
+        statusTv = label("正在读取门列表…", Ui.T_BODY, C_STATUS_TEXT, false);
         statusTv.setPadding(dp(14), dp(12), dp(14), dp(12));
         GradientDrawable box = new GradientDrawable();
         box.setColor(C_STATUS_BG);
-        box.setCornerRadius(dp(10));
+        box.setCornerRadius(dp(Ui.R_MD));
         box.setStroke(dp(1), C_STATUS_EDGE);
         statusTv.setBackground(box);
         body.addView(statusTv);
@@ -327,7 +340,7 @@ public class DoorListActivity extends Activity {
     }
 
     private void toast(final String s) {
-        Ui.toast(this, s);
+        Ui.snack(this, s);
     }
 
     /** 首次打开：缓存优先渲染，再后台刷新。 */
@@ -469,13 +482,13 @@ public class DoorListActivity extends Activity {
                 String lastKind = "";
                 for (final QinlinApi.Door d : doors) {
                     if (!d.kind.equals(lastKind)) {
-                        TextView group = label("▸ " + d.kind + " 区域", 13,
+                        TextView group = label("▸ " + d.kind + " 区域", Ui.T_BODY,
                                 C_NAVY, true);
                         group.setPadding(0, dp(12), 0, dp(2));
                         doorsBox.addView(group);
                         lastKind = d.kind;
                     }
-                    Button b = button(d.listLabel(), Color.WHITE,
+                    Button b = button(d.listLabel(), C_SURFACE,
                             C_NAVY);
                     b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                     b.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -527,12 +540,10 @@ public class DoorListActivity extends Activity {
         });
     }
 
+    /** 门行样式：未选=卡片底+细描边，已选=蓝底+粗描边；两种都保留系统涟漪。 */
     private void style(Button b, String text, boolean on) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setCornerRadius(dp(8));
-        gd.setColor(on ? C_SEL_BLUE : Color.WHITE);
-        gd.setStroke(on ? dp(2) : dp(1), on ? C_NAVY : C_STROKE);
-        b.setBackground(gd);
+        b.setBackground(Ui.rippled(this, on ? C_BLUE_FILL : C_SURFACE, Ui.R_SM,
+                on ? C_NAVY : C_STROKE));
         b.setTextColor(on ? Color.WHITE : C_NAVY);
         b.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         b.setText((on ? "✓  " : "     ") + text);

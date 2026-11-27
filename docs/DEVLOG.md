@@ -1888,3 +1888,100 @@ v2+v3 签名通过；真机（示例设备 / 示例序列号）覆盖安装后�
    （`OpenWidget.listInstalled()` 判空），新用户首屏不受影响。
 
 **验证**：javac `--release 8` 全量编译 **131 class、退出码 0**；`run-tests.py` **PASS 38 / FAIL 0**。
+
+### 2026-11-27（一）：界面层按审计结论重做（polish / colorize / typeset / adapt / clarify）
+
+impeccable 审计给界面层 11/20（P1 4 条、P2 9 条）。这轮把五组建议全部落地，
+仍然零三方依赖、纯 framework。
+
+**① polish（外壳）**
+- 新增 `AppTheme`：`statusBarColor` / `navigationBarColor` = `@color/q_bg`，`windowLightStatusBar` 按明暗翻转；
+  `MainActivity.applyStatusBarTint()` 再用 `SYSTEM_UI_FLAG_LIGHT_*` 兜一次（
+  `windowLightNavigationBar` 属性要 API 27，而常量 API 26 就有，minSdk 26 也能拿到浅色图标）。
+  旧版继承 `Theme.Material.Light.NoActionBar`，状态栏是一条 `#757575` 灰带。
+- `button()` / `smallButton()` / `makeButton()` / 门列表门行 / 组件标签页全部改 `RippleDrawable`：
+  圆角内容 + 裁在圆角内的涟漪 + 按压态。旧实现 `setBackgroundColor` 把 Button 的 StateList 整个换掉，
+  所以最重要的两个按钮反而是方角、无反馈的。
+- 圆角从 9 种收敛为 4 档：`Ui.R_SM=8 / R_MD=12 / R_LG=16 / R_PILL=99`；
+  3→8、10/12→12、14/15/16/18→16、19/99→99。组件 drawable 同步（18→16、14→12、19→99）。
+
+**② colorize（色板与深色）**
+- 新建 `res/values/colors.xml`（58 个语义令牌）与 `res/values-night/colors.xml`。
+  四个 Activity 的 `C_*` 从 `private static final int` 改为实例字段，在 `loadPalette()`
+  里从资源读取——四个界面 37/19/13/10 处各自维护的调色板合并成一份。
+- 对比度：`C_MUTED #8A94A6`(2.85:1) → `#5F6E86`(4.82:1)；`C_FAINT #9AA7BC`(2.27:1) → `#647287`(4.55:1)；
+  红色文字 `#D93025`(4.45:1) → `#C5221F`(5.40:1)。全部达到 WCAG AA 正文标准。
+- 卡片白底不再写 `Color.WHITE`，改 `q_surface`；输入框 `q_field`；日志框 `q_inset`。
+- 小部件：`widget_bg*.xml` 接 `@color/q_surface` / `@color/q_edge`（深色下自动变深），
+  布局里的文字色全部换成 `@color/q_*`；OpenWidget 运行时 `setTextColor` 改 `c.getColor(...)`。
+  忙碌态灰 `#9AA7BC`（白字 2.4:1）→ `#6B7688`（4.6:1）。
+
+**③ typeset（字号）**
+- 确立六档：`T_CAPTION 11 / T_BODY_S 12 / T_BODY 14 / T_TITLE 17 / T_HEADLINE 22 / T_DISPLAY 26`。
+  9 种散值（10/10.5/11/11.5/12/12.5/13/15/20/21）全部归入阶梯，**10.5sp 与 9sp 已清零**。
+- 日志正文改 `Typeface.MONOSPACE` + 12sp：时间戳 / 级别 / tag 宽度固定后，上下行才能对齐扫读。
+- 日志工具条按钮从约 33dp 抬到 46dp（两行 5 个按钮的误触率问题）。
+
+**④ adapt（边衬与无障碍）**
+- `MainActivity.applyWindowInsets()`：根容器接 `setOnApplyWindowInsetsListener`，
+  把状态栏 / 导航栏 / 刘海高度加进 padding。targetSdk 33 下这些 insets 已被 DecorView 消费，
+  读到 0，行为与改动前一致；但 targetSdk 35 会强制 edge-to-edge，这条通路提前接好。
+  刻意不引用 `WindowInsets.Type`（API 30 的类），避免低版本校验期找不到类。
+- 手机号标签 `setLabelFor` + 两个输入框 `contentDescription`；门形图示按
+  「未选门 / 在线 / 离线」给读屏描述（颜色变化读屏用户看不到）。
+- Manifest 补 `windowSoftInputMode="adjustResize"`：键盘弹出时登录表单可滚，不会把验证码框压住。
+
+**⑤ clarify（空态与反馈）**
+- 未登录页补「登录后可以做什么」三步卡：登录 / 选门 / 开门 + 一行「不经过第三方服务器、无广告 SDK」。
+  原来登录表单下面空掉近半屏。
+- 新增 `Ui.snack()`：底部浮出深色圆角条，2.6s 自动淡出，同一时刻只留一条，任意线程可调，
+  Activity 已销毁时退回 Toast。四个 Activity 内的短提示（已复制 / 已导出 / 名称已更新 /
+  网络异常 / 凭证失效）全部从 Toast 切到它；桌面组件与后台线程仍用 Toast。
+
+**验证**：`aapt2 compile + link` 无告警（资源引用全部可解析）；
+`javac --release 8` 全量 **136 class、退出码 0**；`run-tests.py` **PASS 38 / FAIL 0**。
+**未打包 / 未安装 / 未提交**——视觉与深色模式需要在真机上看，需重新打包后才能验。
+
+### 2026-11-27（二）：P3 两条收尾（previewImage / 尊重「移除动画」）
+
+审计里剩下的两条 P3，都不是新功能，是「别人家的系统设置，我们没接住」。
+
+**① 小组件选择器的空白格：补 `previewImage`**
+
+- 问题：四个 `widget_*_info.xml` 只有 `previewLayout`，那是 API 31 才有的字段。
+  旧启动器和不少第三方桌面只认 `previewImage`，没有就画一个空白灰块——
+  用户在选择器里看不出这四个尺寸分别长什么样。
+- 本机没有图像库（PIL / ImageMagick / cairosvg 全无），硬造位图不现实。
+  改用系统自带 Edge 的无头模式：按真实布局复刻一段 HTML，`--screenshot` 直接截成
+  透明 PNG（`--default-background-color=00000000`），产出与真机渲染同源同色。
+- 新增 `tools/make-widget-previews.py`，四套版式 @3x：
+  `750×330`（4×2）、`750×192`（4×1）、`330×192`（2×1）、`192×192`（1×1），
+  落在 `res/drawable-xxhdpi/`。脚本会校验截图的像素尺寸与 alpha 通道，尺寸不对直接失败，
+  免得某天浏览器改了窗口行为、悄悄产出错图。
+- 尺寸取舍：宽度一律取「声明的最小宽度」（250 / 250 / 110 / 40dp）；
+  单行版高度按 64dp 画而不是声明的 40dp——40dp 里塞三行字会糊成一团，
+  而桌面实际分给单格的高度普遍在 60~80dp。
+- 2×1 / 1×1 的根节点本身就是按钮（`widget_open_mini.xml` / `widget_open_square.xml`），
+  预览图也就不加卡片白底，直接是胶囊 / 圆角方块，否则会多出一圈白边。
+- 两套字段并存：`previewLayout` 给 API 31+ 用真实布局渲染（能跟着深色模式变），
+  `previewImage` 给旧系统兜底。改了配色或布局，重跑脚本即可。
+
+**② 「移除动画」开了还在动：接系统动画时长缩放**
+
+- 关键事实：动画时长缩放为 0 时，`ViewPropertyAnimator` **不是不动，而是立刻跳到终值**。
+  于是按钮会「一步缩到 97% 停在那儿」——一个静止的变形；成功横幅会先瞬移到屏幕外
+  再瞬移回来，闪一下。对主动关动画（晕动症、无障碍）的人来说，这比有动画更难受。
+- `Ui.motionOn(Context)`：`ValueAnimator.areAnimatorsEnabled()`（API 26 起有，正好是 minSdk）；
+  异常时退回直接读 `Settings.Global.ANIMATOR_DURATION_SCALE`；再读不到按「允许」处理。
+  每次调用现读，不注册 ContentObserver——框架自己会同步这个系统设置的变更。
+- 接进三处装饰性动效：
+  1. 开门按钮按压缩放：关掉动画就完全不缩放，并把可能残留的 `scale` 复位成 1；
+  2. 成功横幅：直接显示 / 直接收起，不做垂帘与淡出；
+  3. `Ui.snack()`：直接出现、到点直接移除。
+- 不动的部分：按下震动（`HapticFeedback`）、涟漪、按钮文案变化、状态色——
+  这些是「信息」，不是「动效」，关动画的人同样需要。
+
+**验证**：`aapt2 compile + link` 通过，四张预览图进包、`@drawable/widget_preview*` 全部解析；
+`javac --release 8` 全量 **136 class、退出码 0**；`run-tests.py` **PASS 38 / FAIL 0**。
+**未打包 / 未安装 / 未提交**——选择器里的实际观感、以及「移除动画」下的按压手感，
+都要等下一次打包上真机才能确认。

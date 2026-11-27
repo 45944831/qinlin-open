@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  全局语义色板（浅色）。
+
+  以前每个 Activity 各自维护一份 private static final int C_*，改一个色要改四个文件，
+  而且必然走偏（四个界面 37/19/13/10 处）。现在这里是唯一来源，深色版本在
+  values-night/colors.xml，键名完全一致——Java 侧只认 R.color.q_xxx，不认具体色值。
+
+  命名：q_ 前缀避免与系统/其它资源重名；层级按「表面 → 文字 → 强调 → 语义 → 组件」排列。
+  对比度：所有用于文字的颜色在各自底色上均 >= 4.5:1（WCAG AA 正文）。
+-->
+<resources>
+
+    <!-- ===== 表面 ===== -->
+    <color name="q_bg">#F5F7FB</color>          <!-- 页面底 -->
+    <color name="q_surface">#FFFFFF</color>     <!-- 卡片 / 浮层底 -->
+    <color name="q_field">#FFFFFF</color>       <!-- 输入框底 -->
+    <color name="q_inset">#E9EEF7</color>       <!-- 日志框 / 状态框底 -->
+    <color name="q_skip_bg">#F1F3F7</color>     <!-- 次要按钮底 -->
+    <color name="q_diag_bg">#E8F1FF</color>     <!-- 诊断按钮底 -->
+    <color name="q_filter_bg">#DCE7FA</color>   <!-- 筛选按钮底 -->
+    <color name="q_danger_bg">#F3E8E7</color>   <!-- 清空按钮底 -->
+
+    <!-- ===== 文字 ===== -->
+    <color name="q_ink">#16233B</color>         <!-- 主文字 14.6:1 -->
+    <color name="q_sub">#4F5F78</color>         <!-- 次要 6.0:1 -->
+    <color name="q_muted">#5F6E86</color>       <!-- 三级 4.8:1 -->
+    <color name="q_faint">#647287</color>       <!-- 最弱 4.6:1（仍达 AA） -->
+    <color name="q_log_text">#22304B</color>    <!-- 日志正文 -->
+
+    <!-- ===== 强调 ===== -->
+    <color name="q_blue">#2563EB</color>
+    <!-- 实心蓝底：上面永远压白字，所以深色下不能跟着文字蓝一起变亮 -->
+    <color name="q_blue_fill">#2563EB</color>
+    <color name="q_blue_soft">#E3EAF6</color>
+    <color name="q_blue_edge">#1B4FBF</color>
+    <color name="q_navy">#1B3A6B</color>        <!-- 浅蓝底上的文字 9.3:1 -->
+    <color name="q_green">#137333</color>
+    <color name="q_red">#C5221F</color>         <!-- 红色文字 5.4:1 -->
+    <color name="q_accent_red">#D93025</color>  <!-- 品牌红（填充用，不作小字） -->
+    <color name="q_fail">#B3261E</color>
+    <color name="q_steel">#6B7688</color>
+
+    <!-- ===== 描边 / 分隔 ===== -->
+    <color name="q_edge">#E2E8F2</color>        <!-- 卡片描边 -->
+    <color name="q_edge_strong">#C9D6EA</color> <!-- 输入框 / 按钮描边 -->
+    <color name="q_hairline">#EEF1F6</color>    <!-- 1px 分隔线 -->
+
+    <!-- ===== 组件态 ===== -->
+    <color name="q_toggle_bg">#EEF2F9</color>   <!-- 日志入口底 -->
+    <color name="q_toggle_edge">#9DB4DC</color>
+    <color name="q_logout_edge">#F4C3BE</color>
+    <color name="q_pill_on">#E6F4EA</color>     <!-- 在线胶囊 -->
+    <color name="q_pill_off">#FCEBEB</color>
+    <color name="q_last_bg">#F4F8FF</color>     <!-- 「上次开门」条底 -->
+    <color name="q_last_edge">#E3ECFA</color>
+    <color name="q_door_bg">#EAF1FF</color>     <!-- 门形图示底 -->
+    <color name="q_door_bg_off">#E7EAF0</color>
+    <color name="q_handle_off">#AAB3C2</color>
+    <color name="q_retry_bg">#FFF1E9</color>
+    <color name="q_retry_ink">#8A3B12</color>    <!-- 7.2:1 -->
+
+    <!-- ===== 开门成功横幅 ===== -->
+    <color name="q_banner_1">#16823C</color>
+    <color name="q_banner_2">#0E5C29</color>
+    <color name="q_banner_edge">#0B4A22</color>
+    <color name="q_banner_sub">#E3F5E8</color>
+
+    <!-- ===== 开门主按钮三态 ===== -->
+    <color name="q_btn_top">#F0463C</color>
+    <color name="q_btn_bottom">#C5221F</color>
+    <color name="q_btn_edge">#A51B18</color>
+    <color name="q_btn_press_bottom">#8E1512</color>
+    <color name="q_btn_press_edge">#7A100E</color>
+    <color name="q_btn_off_bottom">#7C899D</color>
+
+    <!-- ===== 日志级别 ===== -->
+    <color name="q_lv_warn">#9A5300</color>
+    <color name="q_lv_ok">#137333</color>
+
+    <!-- ===== 组件主题色（与 OpenWidget.COLORS 顺序一致）===== -->
+    <color name="q_swatch0">#D93025</color>
+    <color name="q_swatch1">#2563EB</color>
+    <color name="q_swatch2">#137333</color>
+    <color name="q_swatch3">#7B2FBE</color>
+    <color name="q_swatch4">#E8620A</color>
+    <color name="q_swatch5">#0B7285</color>
+
+    <!-- ===== 应用内提示条（Snackbar）===== -->
+    <color name="q_snack_bg">#1F2937</color>
+    <color name="q_snack_ink">#FFFFFF</color>
+
+</resources>

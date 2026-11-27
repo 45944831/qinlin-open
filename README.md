@@ -252,6 +252,8 @@ A：APPID / APP_SECRET / AES 密钥是上游公开协议常量（非个人凭证
 
 | 日期 | 内容 |
 | --- | --- |
+| 2026-11-27 · P3 | 小组件补 `previewImage`：4 套版式各一张透明 PNG（旧启动器只认这个字段，选择器里不再空白），由 `tools/make-widget-previews.py` 用 Edge 无头模式按真实布局截图生成；开门按钮缩放松手、成功横幅、应用内提示条改读系统「动画时长缩放」，开了「移除动画」就直接到位，不缩、不闪 |
+| 2026-11-27 | 界面层按 impeccable 审计结论重做：语义色板收敛到 `res/values/colors.xml`（新增 `values-night` 深色主题，状态栏/导航栏与页面同色）；按钮改 RippleDrawable（圆角 + 涟漪 + 按压态）；圆角收敛为 8/12/16/胶囊四档、字号收敛为 11/12/14/17/22/26 六档；`C_MUTED`/`C_FAINT` 提到 AA 对比度；日志正文改等宽 12sp；补 `labelFor` / 门形图示读屏描述 / WindowInsets 通路；未登录补「登录后可以做什么」空态卡；Activity 内提示由 Toast 改为应用内提示条 |
 | 2026-11-26 | 第八轮代码审查全量修复：换账号清门分支不可达（手机号改为登录成功才与凭证同一次落盘）、登录/发短信在途防护、JSON `null` 不再被当成 `"null"` 凭证、HTTP 401 纳入 `SESSION_EXPIRED`、退出登录隐藏开门区；探活去掉持锁网络 IO 并区分「真失效 / 网络异常 / 网关无结论」（弱网不再误报重新登录）、探活结果校验凭证是否已被新登录替换；门列表刷新在途控制与回调存活检查、组件名草稿保留、`AppLog` 句柄泄漏、`Net.online` 切换空窗误拦、5xx 立即停止换姿势、响应体 4MB 上限 |
 | 2026-11-18 | 小组件设置浮层：顶部横排标签管理所有已放置组件，可逐个改名（限 5 个字）、换主题色（6 套，作用于按钮与卡片底色）、指定控制哪扇门；1×1 显示组件名并按字数缩字号；主界面加「组件设置 ▸」入口，点卡片组件名直接定位；名称/配色按 `appWidgetId` 独立存储；真机反馈修正：颜色区 6 格等分对齐、选门按钮文案、多组件点击时只有被点组件显示「开门中」 |
 | 2026-11-16 · 第二批 | **O1** 门列表 `commonlyUsedDoor` 按单对象解析（旧代码整键跳过）；**O2** `code 121` 独立映射 `SIGN_REJECTED`；**O3** 上游 5xx 改读 `exception`/`error`；**O4** 弱网不再串行试 4 种请求姿势；**N1** 展示会话剩余有效期；**N2** 提示门禁授权到期标记；并修复「门列表 401 被兜底逻辑吞掉」导致只显示「未读取到门列表」的旧 bug |
@@ -269,8 +271,12 @@ A：APPID / APP_SECRET / AES 密钥是上游公开协议常量（非个人凭证
 | `src/com/wb/qinlin/core/` | **纯逻辑、不 import android.***：手机号 / 验证码校验、TTL 衰减、改名字符截断 |
 | `src/com/wb/qinlin/SecureStore.java` | 本机凭证加密层（AndroidKeyStore AES-GCM + 字段名 AAD，含明文/v1 自动迁移） |
 | `src/com/wb/qinlin/Errors.java` | 统一错误文案（网络异常 / 业务码 → 人话），两个界面共用 |
-| `tests/CoreSelfTest.java` | core 包自检（33 条用例），`python run-tests.py` 直接跑 |
+| `tests/CoreSelfTest.java` | core 包自检（38 条用例），`python run-tests.py` 直接跑 |
+| `src/com/wb/qinlin/Ui.java` | 设计基元：dp、字号/圆角阶梯、带涟漪的圆角背景、Toast 与应用内提示条 |
+| `res/values/colors.xml` | 全局语义色板（浅色）；四个界面与小部件共用，`values-night/` 为深色版本 |
+| `res/drawable-xxhdpi/` | 小组件选择器预览图（`previewImage`，@3x），由脚本生成，改布局后重跑即可 |
 | `res/` | XML 布局 / drawable / 小组件配置 |
+| `tools/make-widget-previews.py` | 用系统 Edge 无头模式把复刻布局截图成透明 PNG（本机无 PIL，纯离线） |
 | `build-apk.py` | 离线构建脚本（SDK/JDK 走环境变量，版本号由 git 注入） |
 | `run-tests.py` | 零依赖测试入口（只需 JDK，不需要 Android SDK） |
 | `docs/DEVLOG.md` | 完整排查与真机实测记录（按时间追加，已脱敏） |

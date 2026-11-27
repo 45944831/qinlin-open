@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  深色色板。键名与 values/colors.xml 一一对应，Java 侧代码不需要任何 if (night)。
+  夜间回家开门正是这个 App 的主场景，之前的全白界面会直接刺眼，这版补齐。
+
+  对比度按「深色底 / 深色卡片」两端分别验证，全部 >= 4.5:1。
+  品牌红在深色下提亮（q_accent_red / q_red），否则 #D93025 压在 #0F141B 上会发暗。
+-->
+<resources>
+
+    <!-- ===== 表面 ===== -->
+    <color name="q_bg">#0F141B</color>
+    <color name="q_surface">#171E28</color>
+    <color name="q_field">#131A23</color>
+    <color name="q_inset">#101822</color>
+    <color name="q_skip_bg">#1D242E</color>
+    <color name="q_diag_bg">#17253A</color>
+    <color name="q_filter_bg">#1B2941</color>
+    <color name="q_danger_bg">#33201F</color>
+
+    <!-- ===== 文字 ===== -->
+    <color name="q_ink">#E6EDF7</color>
+    <color name="q_sub">#B3C0D2</color>
+    <color name="q_muted">#9AA8BC</color>
+    <color name="q_faint">#8B99AC</color>
+    <color name="q_log_text">#CBD7E6</color>
+
+    <!-- ===== 强调 ===== -->
+    <color name="q_blue">#7EA8FF</color>
+    <!-- 实心蓝底：上面永远压白字，所以深色下不能跟着文字蓝一起变亮 -->
+    <color name="q_blue_fill">#2F5FCC</color>
+    <color name="q_blue_soft">#1E2B40</color>
+    <color name="q_blue_edge">#3E63A8</color>
+    <color name="q_navy">#BFD4FF</color>
+    <color name="q_green">#4ADE80</color>
+    <color name="q_red">#FF6B60</color>
+    <color name="q_accent_red">#E5483D</color>
+    <color name="q_fail">#FF8A80</color>
+    <color name="q_steel">#A9B6C8</color>
+
+    <!-- ===== 描边 / 分隔 ===== -->
+    <color name="q_edge">#26303F</color>
+    <color name="q_edge_strong">#33415A</color>
+    <color name="q_hairline">#1F2733</color>
+
+    <!-- ===== 组件态 ===== -->
+    <color name="q_toggle_bg">#1A2230</color>
+    <color name="q_toggle_edge">#35496B</color>
+    <color name="q_logout_edge">#6A3733</color>
+    <color name="q_pill_on">#12281A</color>
+    <color name="q_pill_off">#2C1717</color>
+    <color name="q_last_bg">#161E2B</color>
+    <color name="q_last_edge">#22304A</color>
+    <color name="q_door_bg">#1A2434</color>
+    <color name="q_door_bg_off">#1A1F27</color>
+    <color name="q_handle_off">#566274</color>
+    <color name="q_retry_bg">#35231A</color>
+    <color name="q_retry_ink">#FFB68A</color>
+
+    <!-- ===== 开门成功横幅 ===== -->
+    <color name="q_banner_1">#17803D</color>
+    <color name="q_banner_2">#0D4F26</color>
+    <color name="q_banner_edge">#0A3D1E</color>
+    <color name="q_banner_sub">#D6F3E0</color>
+
+    <!-- ===== 开门主按钮三态 ===== -->
+    <color name="q_btn_top">#E5483D</color>
+    <color name="q_btn_bottom">#B3261E</color>
+    <color name="q_btn_edge">#8F1B16</color>
+    <color name="q_btn_press_bottom">#7E1310</color>
+    <color name="q_btn_press_edge">#6A0F0C</color>
+    <color name="q_btn_off_bottom">#49556A</color>
+
+    <!-- ===== 日志级别 ===== -->
+    <color name="q_lv_warn">#FFC46B</color>
+    <color name="q_lv_ok">#4ADE80</color>
+
+    <!-- ===== 组件主题色 ===== -->
+    <color name="q_swatch0">#F0574C</color>
+    <color name="q_swatch1">#4E86F7</color>
+    <color name="q_swatch2">#2FA35A</color>
+    <color name="q_swatch3">#A15FE0</color>
+    <color name="q_swatch4">#F08A3C</color>
+    <color name="q_swatch5">#2A97AC</color>
+
+    <!-- ===== 应用内提示条 ===== -->
+    <color name="q_snack_bg">#E6EDF7</color>
+    <color name="q_snack_ink">#10151C</color>
+
+</resources>

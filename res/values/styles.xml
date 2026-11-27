@@ -1,5 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      应用主题：以前直接挂在系统 Theme.Material.Light.NoActionBar 上，
+      状态栏保留默认灰 #757575，压在 #F5F7FB 的页面上像一条没做完的带子。
+      这里把状态栏 / 导航栏都染成页面底色，并声明浅色图标（深色文字在浅底上才看得见）。
+
+      windowLightNavigationBar 是 API 27 才有的属性：minSdk 26 上系统会忽略未知属性，
+      不需要单独开 values-v27。
+    -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/q_bg</item>
+        <item name="android:statusBarColor">@color/q_bg</item>
+        <item name="android:navigationBarColor">@color/q_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">@color/q_blue</item>
+    </style>
+
     <!-- 门列表以悬浮卡片盖在主界面之上：主界面仍可见并变暗，不跳全屏页面 -->
     <style name="FloatingDoorList" parent="@android:style/Theme.Material.Light.Dialog.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
